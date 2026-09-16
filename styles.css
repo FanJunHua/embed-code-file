@@ -14,6 +14,19 @@
 /* ===== Add embed-code（g-003 右键快速添加）===== */
 .embed-add-modal .setting-item-control {
     position: relative;
+    min-width: 0;
+    max-width: 100%;
+    overflow: visible;
+}
+
+.embed-add-path-wrap {
+    position: relative;
+    width: 100%;
+    min-width: 0;
+}
+
+.embed-add-path-wrap input[type="text"] {
+    width: 100%;
 }
 
 .embed-add-source-buttons {
@@ -26,8 +39,10 @@
     top: calc(100% + 2px);
     left: 0;
     right: 0;
+    max-width: 100%;
     max-height: 220px;
     overflow-y: auto;
+    overflow-x: hidden;
     background-color: var(--background-secondary);
     border: 1px solid var(--background-modifier-border);
     border-radius: 6px;
@@ -40,6 +55,9 @@
     cursor: pointer;
     color: var(--text-muted);
     font-size: var(--font-ui-smaller);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .embed-add-suggest-item.is-active {
@@ -48,8 +66,12 @@
 }
 
 .embed-add-suggest-path {
+    display: block;
     font-family: var(--font-monospace);
     font-size: var(--font-ui-smaller);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .embed-add-preview {

@@ -148,7 +148,11 @@ export class AddEmbedCodeModal extends Modal {
 				this.pathInput.addEventListener('keydown', (e: KeyboardEvent) => this.onPathKeydown(e));
 				this.pathInput.addEventListener('change', () => this.onPathCommit());
 			});
-		this.suggestEl = this.pathSetting.controlEl.createDiv('embed-add-suggest');
+		// 把路径输入框包进 relative wrapper，建议下拉以输入框为锚，
+		// 完整落在 Modal 内容区内并与输入框左右对齐（F-2 修复）
+		const pathWrap = this.pathSetting.controlEl.createDiv('embed-add-path-wrap');
+		pathWrap.appendChild(this.pathInput);
+		this.suggestEl = pathWrap.createDiv('embed-add-suggest');
 		this.suggestEl.hide();
 		this.suggestOpen = false;
 
