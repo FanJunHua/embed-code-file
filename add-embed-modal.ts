@@ -264,7 +264,8 @@ export class AddEmbedCodeModal extends Modal {
 				scored.push({ file, score: match.score });
 			}
 		});
-		scored.sort((a, b) => a.score - b.score);
+		// prepareFuzzySearch 的 score 越高表示匹配越好，降序取优（与 QuickSwitcher 惯例一致）
+		scored.sort((a, b) => b.score - a.score);
 		return scored.slice(0, 20).map(x => x.file);
 	}
 
