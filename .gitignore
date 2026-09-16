@@ -26,3 +26,6 @@ data.json
 
 # Local build output (distributed via GitHub Releases instead)
 output/
+
+# Internal project docs (requirements/archives/analysis, local only, never commit)
+docs/
