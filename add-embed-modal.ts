@@ -148,6 +148,8 @@ export class AddEmbedCodeModal extends Modal {
 				this.pathInput.addEventListener('keydown', (e: KeyboardEvent) => this.onPathKeydown(e));
 				this.pathInput.addEventListener('change', () => this.onPathCommit());
 			});
+		// F-3：路径行改整行布局（label/描述在上，输入框在下占满整行），建议列表随之完整展示
+		this.pathSetting.settingEl.addClass('embed-add-path-item');
 		// 把路径输入框包进 relative wrapper，建议下拉以输入框为锚，
 		// 完整落在 Modal 内容区内并与输入框左右对齐（F-2 修复）
 		const pathWrap = this.pathSetting.controlEl.createDiv('embed-add-path-wrap');

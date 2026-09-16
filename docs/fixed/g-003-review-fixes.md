@@ -28,3 +28,16 @@
   2. esbuild 0.14.47 CLI 重打包（production 配置）→ exit 0（22.9kb）；
   3. 产物核验：`output/embed-code-file/` 三件套更新（main.js 23,432B / manifest.json 288B / styles.css 2,541B）；bundle 含 `embed-add-path-wrap` 结构、F-1 降序比较器保留；styles.css 规则落位自查：`text-overflow`×2、`overflow-x`×1、`min-width`×2、`max-width:100%`×2；
   4. 提交：fix(g-003) 至 g-003-att-01 分支，待主管复核后由负责人复测同一位置截图确认。
+
+## F-3 路径输入框窄右列导致建议列表展示过短（来源：负责人复测 2026-09-16）
+
+- **现象**（负责人复测，原话：「将红框选中部分改为蓝色部分，即变长，让输入文件后给的 suggestion 能够完整展示」）：F-2 后列表已不越界、长路径有省略号，但路径输入框仍处 Obsidian Setting 的窄右列且右端被裁切（显示为 `vault://Code/main.c…`），下拉锚定输入框随之受限，候选项只能显示很短一段。
+- **原因**：Setting 默认「左 label/描述 + 右 control」两列布局，路径输入框宽度被右列约束；下拉以输入框为锚，宽度随之受限。
+- **修复内容**（只改路径行，功能逻辑零改动，保留 F-2 全部溢出/截断规则）：
+  1. add-embed-modal.ts：`this.pathSetting.settingEl.addClass('embed-add-path-item');`（仅路径行加类）；
+  2. styles.css 新增：`.embed-add-modal .setting-item.embed-add-path-item { flex-direction: column; align-items: stretch; }` 与 `.embed-add-modal .setting-item.embed-add-path-item .setting-item-control { width: 100%; justify-content: flex-start; margin-top: 4px; }`——label/描述在上、输入框在下占满整行，下拉随之获得整行宽度（超长仍以 … 截断）；语言/行范围/标题行保持原右列布局。
+- **验证结果**：
+  1. `node node_modules\typescript\bin\tsc --noEmit --skipLibCheck` → exit 0；
+  2. esbuild 0.14.47 CLI 重打包（production 配置）→ exit 0；
+  3. 产物核验：`output/embed-code-file/` 三件套更新；styles.css 含 `embed-add-path-item` 两条规则；bundle 含该类名；F-2 溢出/截断规则保留（`overflow-x:hidden`、`text-overflow:ellipsis`、`min-width:0` 均在位）；
+  4. 提交：fix(g-003) 至 g-003-att-01 分支，待主管复核后由负责人再次复测截图确认。
