@@ -1,6 +1,7 @@
 # Embed Code File (Obsidian Plugin)
 
 English | [简体中文](README_CN.md)
+🎨 [✨ Feature Showcase](https://fanjunhua.github.io/embed-code-file/)
 
 This plugin allows embedding code files from an Obsidian vault or a remote file (e.g., GitHub). It works better with the live preview feature of Obsidian.
 

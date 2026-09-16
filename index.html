@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Embed Code File - Obsidian Plugin</title>
+<meta name="description" content="Embed code files from your Obsidian vault or remote sources (e.g. GitHub) with quick right-click add, line ranges, titles, and upcoming line numbers. 在 Obsidian 中嵌入代码文件：右键快速添加、行选与标题，行号显示开发中。">
+<style>
+  :root {
+    --bg-page: #101010;
+    --bg-editor: #1e1e1e;
+    --bg-code: #161616;
+    --bg-secondary: #262626;
+    --border: #3f3f3f;
+    --text: #dadada;
+    --text-muted: #999999;
+    --text-faint: #6e6e6e;
+    --accent: #8a5cf5;
+    --accent-soft: rgba(138, 92, 245, .12);
+    --ok: #3fb950;
+    --ok-soft: rgba(63, 185, 80, .14);
+    --warn: #d29922;
+    --warn-soft: rgba(210, 153, 34, .14);
+    --mono: "JetBrains Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+  }
+  body.light {
+    --bg-page: #f2f3f5;
+    --bg-editor: #ffffff;
+    --bg-code: #f6f6f6;
+    --bg-secondary: #e9e9e9;
+    --border: #d8d8d8;
+    --text: #383a42;
+    --text-muted: #7a7a7a;
+    --text-faint: #b0b0b4;
+    --accent: #7852ee;
+    --accent-soft: rgba(120, 82, 238, .10);
+    --ok: #1a7f37;
+    --ok-soft: rgba(26, 127, 55, .12);
+    --warn: #9a6700;
+    --warn-soft: rgba(154, 103, 0, .12);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0 0 80px;
+    background: var(--bg-page); color: var(--text);
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    line-height: 1.65;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 0 20px; }
+  code {
+    font-family: var(--mono); font-size: .92em;
+    background: var(--bg-secondary); border-radius: 4px; padding: 1px 5px;
+  }
+  a { color: var(--accent); }
+
+  /* 顶部固定按钮 */
+  .theme-toggle, .lang-toggle {
+    position: fixed; right: 16px; z-index: 90;
+    font: inherit; font-size: 13px; color: var(--text);
+    background: var(--bg-secondary); border: 1px solid var(--border);
+    border-radius: 999px; padding: 6px 14px; cursor: pointer;
+  }
+  .theme-toggle { top: 14px; }
+  .lang-toggle { top: 54px; }
+  .theme-toggle:hover, .lang-toggle:hover { border-color: var(--accent); }
+
+  /* ---------- Hero ---------- */
+  header.hero { padding: 56px 0 8px; text-align: center; }
+  header.hero h1 {
+    margin: 0; font-size: 34px; letter-spacing: .5px;
+    background: linear-gradient(90deg, var(--accent), #4ec9b0);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent; color: var(--accent);
+  }
+  .hero-sub { margin: 4px 0 0; font-size: 15px; color: var(--text-muted); font-family: var(--mono); }
+  .hero-tagline { margin: 14px auto 0; max-width: 640px; font-size: 15.5px; color: var(--text); }
+  .pills { margin-top: 18px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .pill { font-size: 12.5px; border-radius: 999px; padding: 4px 14px; border: 1px solid; text-decoration: none; }
+  .pill-ok { color: var(--ok); background: var(--ok-soft); border-color: var(--ok); }
+  .pill-wip { color: var(--warn); background: var(--warn-soft); border-color: var(--warn); }
+  .pill-gh { color: var(--text); background: var(--bg-secondary); border-color: var(--border); }
+  .pill-gh:hover { border-color: var(--accent); }
+
+  section.step { margin-top: 52px; }
+  section.step > h2 { font-size: 19px; margin: 0 0 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; border-radius: 50%; flex: none;
+    background: var(--accent); color: #fff; font-size: 13.5px; font-weight: 600;
+  }
+  .hint { color: var(--text-muted); font-size: 13.5px; margin: 6px 0 14px; }
+  .hint b { color: var(--text); }
+  .sec-badge { font-size: 11.5px; border-radius: 999px; padding: 2px 10px; border: 1px solid; }
+  .sec-badge.ok { color: var(--ok); background: var(--ok-soft); border-color: var(--ok); }
+  .sec-badge.wip { color: var(--warn); background: var(--warn-soft); border-color: var(--warn); }
+
+  .panel {
+    background: var(--bg-editor); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; box-shadow: 0 6px 24px rgba(0,0,0,.18);
+  }
+  .codeblock {
+    margin: 10px 0 0; padding: 12px 14px; border-radius: 8px;
+    background: var(--bg-code); border: 1px solid var(--border);
+    font-family: var(--mono); font-size: 12.8px; line-height: 1.7;
+    white-space: pre; overflow-x: auto;
+  }
+  .codeblock .k { color: #c792ea; }
+  .codeblock .s { color: #a5d6a7; }
+  .codeblock .lang { color: var(--accent); font-weight: 600; }
+  .codeblock .dim { color: var(--text-faint); }
+  .panel-title { font-size: 12.5px; color: var(--text-muted); margin: 14px 0 0; }
+  .panel-title b { color: var(--text); }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 6px; }
+  @media (max-width: 760px) { .pair { grid-template-columns: 1fr; } }
+
+  /* 特性卡片 */
+  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px; }
+  @media (max-width: 760px) { .cards { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--bg-editor); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .card h4 { margin: 0 0 4px; font-size: 14px; color: var(--text); }
+  .card h4::before { content: "◆ "; color: var(--accent); }
+  .card p { margin: 0; font-size: 13px; color: var(--text-muted); }
+
+  /* 行号演示 */
+  .wip-wrap { position: relative; }
+  .wip-flag {
+    position: absolute; top: 8px; right: 8px; z-index: 5;
+    font-size: 11px; border-radius: 4px; padding: 1px 8px;
+    color: var(--warn); background: var(--warn-soft); border: 1px solid var(--warn);
+  }
+  .embed-pre {
+    margin: 0; background: var(--bg-code); border-radius: 6px;
+    font-family: var(--mono); font-size: 12.8px; overflow: hidden;
+  }
+  .embed-title {
+    display: block; padding: 4px 10px; font-size: 85%;
+    background: rgba(127,127,127,.12); color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+  }
+  .embed-code { display: block; padding: 10px 0; }
+  .ln { display: flex; }
+  .ln .no {
+    flex: none; min-width: 3ch; text-align: right; line-height: 21px;
+    padding-right: 14px; margin-left: 10px; color: var(--text-faint); user-select: none;
+  }
+  .ln .tx { white-space: pre; line-height: 21px; padding-right: 14px; }
+  .ln.dots .tx { color: var(--text-faint); }
+  ul.points { padding-left: 20px; margin: 12px 0 0; }
+  ul.points li { margin: 5px 0; font-size: 13.5px; }
+  .dropdown-mock { display: inline-flex; align-items: center; gap: 8px; margin: 4px 0 2px; }
+  .dropdown-mock select {
+    font: inherit; font-size: 13.5px; color: var(--text);
+    background: var(--bg-secondary); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 10px; min-width: 200px;
+  }
+
+  /* 总览表 */
+  table.ov { border-collapse: collapse; width: 100%; font-size: 13.5px; margin-top: 8px; }
+  table.ov th, table.ov td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; vertical-align: top; }
+  table.ov th { background: var(--bg-secondary); font-weight: 600; }
+  table.ov td { background: var(--bg-editor); }
+  .st { font-size: 12px; border-radius: 999px; padding: 2px 10px; border: 1px solid; white-space: nowrap; }
+  .st.ok { color: var(--ok); background: var(--ok-soft); border-color: var(--ok); }
+  .st.wip { color: var(--warn); background: var(--warn-soft); border-color: var(--warn); }
+
+  footer { margin-top: 60px; border-top: 1px solid var(--border); padding-top: 18px; font-size: 13px; color: var(--text-muted); }
+  .links { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 10px; }
+  footer .made { margin: 0 0 4px; }
+  footer .note { margin: 0; font-size: 12px; color: var(--text-faint); }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="themeToggle" type="button">🌗 <span data-i18n="themeBtn">切换浅色 / 深色</span></button>
+<button class="lang-toggle" id="langToggle" type="button" title="中文 / English">🌐 中文 / EN</button>
+
+<div class="wrap">
+
+<!-- ============ Hero ============ -->
+<header class="hero">
+  <h1>Embed Code File</h1>
+  <p class="hero-sub">Obsidian Plugin</p>
+  <p class="hero-tagline" data-i18n="heroTagline">在 Obsidian 笔记中嵌入代码文件——来自 vault 或远程（如 GitHub），支持行选、标题与行号显示。</p>
+  <div class="pills">
+    <a class="pill pill-gh" href="https://github.com/FanJunHua/embed-code-file" target="_blank" rel="noopener">⭐ FanJunHua/embed-code-file</a>
+    <span class="pill pill-ok" data-i18n="pillReleased">v1.3.0 · 已发布</span>
+    <span class="pill pill-wip" data-i18n="pillWip">行号显示 · 开发中</span>
+  </div>
+</header>
+
+<!-- ============ 1 核心用法 ============ -->
+<section class="step">
+  <h2><span class="badge">1</span><span data-i18n="s1title">核心用法</span></h2>
+  <p class="hint" data-i18n-html="s1hint">在代码围栏标记前加 <code>embed-</code> 前缀，并用 YAML 键值对声明来源与选项（<code>PATH</code> 必填，<code>LINES</code> / <code>TITLE</code> 可选）。</p>
+  <div class="panel">
+    <p class="panel-title" style="margin-top:0"><b data-i18n="syntaxTitle">语法</b></p>
+    <pre class="codeblock"><span class="dim">```</span><span class="lang">embed-&lt;lang&gt;</span>
+<span class="k">PATH:</span> <span class="s">"vault://&lt;path-to-code-file&gt;"</span>
+<span class="k">LINES:</span> <span class="s">"2,9,30-40"</span>
+<span class="k">TITLE:</span> <span class="s">"Some title"</span>
+<span class="dim">```</span></pre>
+    <div class="pair">
+      <div>
+        <p class="panel-title"><b data-i18n="exVaultTitle">示例 · vault 本地文件</b></p>
+        <pre class="codeblock"><span class="dim">```</span><span class="lang">embed-cpp</span>
+<span class="k">PATH:</span> <span class="s">"vault://Code/main.cpp"</span>
+<span class="k">LINES:</span> <span class="s">"2,9,30-40"</span>
+<span class="k">TITLE:</span> <span class="s">"QuickSort core"</span>
+<span class="dim">```</span></pre>
+      </div>
+      <div>
+        <p class="panel-title"><b data-i18n="exRemoteTitle">示例 · 远程文件（GitHub raw）</b></p>
+        <pre class="codeblock"><span class="dim">```</span><span class="lang">embed-ts</span>
+<span class="k">PATH:</span> <span class="s">"https://raw.githubusercontent.com/FanJunHua/embed-code-file/v1.3.0/main.ts"</span>
+<span class="k">LINES:</span> <span class="s">"30-40"</span>
+<span class="k">TITLE:</span> <span class="s">"main.ts (remote)"</span>
+<span class="dim">```</span></pre>
+      </div>
+    </div>
+    <p class="panel-title"><b data-i18n="langListTitle">默认语言</b></p>
+    <p class="hint" style="margin-top:4px" data-i18n-html="langListDesc">默认登记：<code>c,cs,cpp,java,python,go,ruby,javascript,js,typescript,ts,shell,sh,bash</code>。可在设置页 <code>Included Languages</code> 自定义增删。</p>
+  </div>
+</section>
+
+<!-- ============ 2 右键快速添加 ============ -->
+<section class="step">
+  <h2><span class="badge">2</span><span data-i18n="s2title">右键快速添加</span><span class="sec-badge ok" data-i18n="s2badge">v1.3.0 已发布</span></h2>
+  <p class="hint" data-i18n-html="s2hint">在 Markdown 编辑区内点击右键，选择 <b>Add embed-code</b> 打开添加弹窗——不用手写 YAML。</p>
+  <div class="cards">
+    <div class="card"><h4 data-i18n="f1t">来源分段切换</h4><p data-i18n="f1d">📁 Vault 文件 / ☁️ 远程 URL 一键切换；远程提示使用 raw 链接。</p></div>
+    <div class="card"><h4 data-i18n="f2t">模糊搜索 Top 20</h4><p data-i18n-html="f2d">输入即搜库内文件，按匹配度<b>降序</b>取前 20 条（v1.3.0 修复排序）。</p></div>
+    <div class="card"><h4 data-i18n="f3t">自动补 vault:// 前缀</h4><p data-i18n-html="f3d">选中或输入文件路径自动携带 <code>vault://</code>，无需手打。</p></div>
+    <div class="card"><h4 data-i18n="f4t">扩展名自动匹配语言</h4><p data-i18n-html="f4d">选中文件后按扩展名匹配语言：<code>.cpp→cpp</code>、<code>.ts→typescript</code>、<code>.py→python</code>、<code>.sh→bash</code> 等；无匹配保持当前选择。</p></div>
+    <div class="card"><h4 data-i18n="f5t">LINES 选区预填与组合</h4><p data-i18n-html="f5d">从菜单进入时选区行号自动预填（如 <code>5-12</code>）；支持 <code>2,9,30-40</code> 组合；留空 = 全部行。</p></div>
+    <div class="card"><h4 data-i18n="f6t">TITLE 留空回退</h4><p data-i18n="f6d">TITLE 留空则整行省略，渲染时回退显示 PATH。</p></div>
+    <div class="card"><h4 data-i18n="f7t">实时插入预览</h4><p data-i18n="f7d">弹窗底部实时展示将插入光标处的完整代码块（前后补空行）。</p></div>
+  </div>
+</section>
+
+<!-- ============ 3 行号显示（开发中） ============ -->
+<section class="step">
+  <h2><span class="badge">3</span><span data-i18n="s3title">行号显示</span><span class="sec-badge wip" data-i18n="s3badge">🚧 开发中 · 下个版本</span></h2>
+  <div class="panel" style="border-color: var(--warn); background: var(--warn-soft);">
+    <span data-i18n-html="s3notice"><b>开发中（Coming soon）：</b>以下为阶段三规划的交互示意，当前版本<b>尚未包含</b>该功能；演示效果不代表已发布行为。</span>
+  </div>
+  <p class="hint" style="margin-top:12px" data-i18n="s3setHint">设置页将新增下拉（三种模式）：</p>
+  <div class="dropdown-mock">
+    <select aria-label="line number mode mock">
+      <option data-i18n="optNone">不显示（默认）</option>
+      <option data-i18n="optOriginal">显示原行号</option>
+      <option data-i18n="optNew">显示新行号</option>
+    </select>
+  </div>
+  <p class="panel-title"><b data-i18n-html="demoCaption">对照：<code>LINES: "56-58"</code>（源文件 main.cpp）</b></p>
+  <div class="pair">
+    <div class="wip-wrap">
+      <span class="wip-flag" data-i18n="wipFlag">🚧 开发中</span>
+      <pre class="embed-pre"><span class="embed-title">main.cpp</span><span class="embed-code"><span class="ln"><span class="no"></span><span class="tx">...</span></span><span class="ln"><span class="no">56</span><span class="tx">int fib(int n) {</span></span><span class="ln"><span class="no">57</span><span class="tx">    return n &lt; 2 ? n : fib(n-1) + fib(n-2);</span></span><span class="ln"><span class="no">58</span><span class="tx">}</span></span><span class="ln dots"><span class="no"></span><span class="tx">...</span></span></span></pre>
+      <p class="panel-title" data-i18n-html="demoOrig">显示原行号 → <b>56 / 57 / 58</b></p>
+    </div>
+    <div class="wip-wrap">
+      <span class="wip-flag" data-i18n="wipFlag">🚧 开发中</span>
+      <pre class="embed-pre"><span class="embed-title">main.cpp</span><span class="embed-code"><span class="ln"><span class="no"></span><span class="tx">...</span></span><span class="ln"><span class="no">1</span><span class="tx">int fib(int n) {</span></span><span class="ln"><span class="no">2</span><span class="tx">    return n &lt; 2 ? n : fib(n-1) + fib(n-2);</span></span><span class="ln"><span class="no">3</span><span class="tx">}</span></span><span class="ln dots"><span class="no"></span><span class="tx">...</span></span></span></pre>
+      <p class="panel-title" data-i18n-html="demoNew">显示新行号 → <b>1 / 2 / 3</b></p>
+    </div>
+  </div>
+  <ul class="points">
+    <li data-i18n-html="pt1"><code>...</code> 省略行<b>不编号、不占号</b>（行号单元格留空）。</li>
+    <li data-i18n-html="pt2">多段 LINES（如 <code>25,34,45-76</code>）新行号<b>跨段连续计数</b>。</li>
+    <li data-i18n-html="pt3">仅对 <code>embed-&lt;lang&gt;</code> 块生效；普通代码块与 Obsidian 原生行为不受影响。</li>
+    <li data-i18n-html="pt4">阅读视图与 live preview 均生效；配色走 Obsidian CSS 变量，浅色/深色主题自动适配。</li>
+  </ul>
+</section>
+
+<!-- ============ 4 特性总览 + 主题 ============ -->
+<section class="step">
+  <h2><span class="badge">4</span><span data-i18n="s4title">特性总览</span></h2>
+  <p class="hint" data-i18n="s5themeHint">本页右上角可切换浅色 / 深色主题预览——实际实现使用 Obsidian 主题 CSS 变量，自动跟随当前库主题。</p>
+  <table class="ov">
+    <tr><th data-i18n="thFeature">特性</th><th style="width:130px" data-i18n="thStatus">状态</th></tr>
+    <tr><td data-i18n="ov1">右键快速添加（菜单 + 弹窗）</td><td><span class="st ok" data-i18n="stReleased">已发布</span></td></tr>
+    <tr><td data-i18n="ov2">Vault 模糊搜索（Top 20 · 降序）</td><td><span class="st ok" data-i18n="stReleased">已发布</span></td></tr>
+    <tr><td data-i18n="ov3">下拉溢出与长路径截断修复</td><td><span class="st ok" data-i18n="stReleased">已发布</span></td></tr>
+    <tr><td data-i18n="ov4">路径输入框整行宽度</td><td><span class="st ok" data-i18n="stReleased">已发布</span></td></tr>
+    <tr><td data-i18n="ov5">扩展名 → 语言自动匹配</td><td><span class="st ok" data-i18n="stReleased">已发布</span></td></tr>
+    <tr><td data-i18n="ov6">LINES 选区预填与组合语法</td><td><span class="st ok" data-i18n="stReleased">已发布</span></td></tr>
+    <tr><td data-i18n="ov7">TITLE 留空省略回退 PATH</td><td><span class="st ok" data-i18n="stReleased">已发布</span></td></tr>
+    <tr><td data-i18n="ov8">实时插入预览</td><td><span class="st ok" data-i18n="stReleased">已发布</span></td></tr>
+    <tr><td data-i18n="ov9">双语 README（中/英）</td><td><span class="st ok" data-i18n="stReleased">已发布</span></td></tr>
+    <tr><td data-i18n="ov10">行号显示（原/新行号）</td><td><span class="st wip" data-i18n="stWip">开发中</span></td></tr>
+  </table>
+</section>
+
+<!-- ============ 页脚 ============ -->
+<footer>
+  <div class="links">
+    <a href="https://github.com/FanJunHua/embed-code-file" target="_blank" rel="noopener" data-i18n="linkRepo">GitHub 仓库</a>
+    <a href="https://github.com/FanJunHua/embed-code-file/releases/tag/v1.3.0" target="_blank" rel="noopener">Release v1.3.0</a>
+    <a href="https://github.com/almariah/embed-code-file" target="_blank" rel="noopener" data-i18n="linkUpstream">上游项目 almariah/embed-code-file</a>
+  </div>
+  <p class="made" data-i18n-html="footerMade">基于上游项目 <a href="https://github.com/almariah/embed-code-file" target="_blank" rel="noopener">almariah/embed-code-file</a> 的 fork 持续开发。</p>
+  <p class="note" data-i18n="footerNote">本页为功能展示单页（原型示意），非插件运行界面。</p>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+  /* ---------- i18n（默认中文，localStorage 记忆） ---------- */
+  var I18N = {
+    zh: {
+      docTitle: 'Embed Code File - Obsidian Plugin',
+      themeBtn: '切换浅色 / 深色',
+      heroTagline: '在 Obsidian 笔记中嵌入代码文件——来自 vault 或远程（如 GitHub），支持行选、标题与行号显示。',
+      pillReleased: 'v1.3.0 · 已发布',
+      pillWip: '行号显示 · 开发中',
+      s1title: '核心用法',
+      s1hint: '在代码围栏标记前加 <code>embed-</code> 前缀，并用 YAML 键值对声明来源与选项（<code>PATH</code> 必填，<code>LINES</code> / <code>TITLE</code> 可选）。',
+      syntaxTitle: '语法',
+      exVaultTitle: '示例 · vault 本地文件',
+      exRemoteTitle: '示例 · 远程文件（GitHub raw）',
+      langListTitle: '默认语言',
+      langListDesc: '默认登记：<code>c,cs,cpp,java,python,go,ruby,javascript,js,typescript,ts,shell,sh,bash</code>。可在设置页 <code>Included Languages</code> 自定义增删。',
+      s2title: '右键快速添加',
+      s2badge: 'v1.3.0 已发布',
+      s2hint: '在 Markdown 编辑区内点击右键，选择 <b>Add embed-code</b> 打开添加弹窗——不用手写 YAML。',
+      f1t: '来源分段切换',
+      f1d: '📁 Vault 文件 / ☁️ 远程 URL 一键切换；远程提示使用 raw 链接。',
+      f2t: '模糊搜索 Top 20',
+      f2d: '输入即搜库内文件，按匹配度<b>降序</b>取前 20 条（v1.3.0 修复排序）。',
+      f3t: '自动补 vault:// 前缀',
+      f3d: '选中或输入文件路径自动携带 <code>vault://</code>，无需手打。',
+      f4t: '扩展名自动匹配语言',
+      f4d: '选中文件后按扩展名匹配语言：<code>.cpp→cpp</code>、<code>.ts→typescript</code>、<code>.py→python</code>、<code>.sh→bash</code> 等；无匹配保持当前选择。',
+      f5t: 'LINES 选区预填与组合',
+      f5d: '从菜单进入时选区行号自动预填（如 <code>5-12</code>）；支持 <code>2,9,30-40</code> 组合；留空 = 全部行。',
+      f6t: 'TITLE 留空回退',
+      f6d: 'TITLE 留空则整行省略，渲染时回退显示 PATH。',
+      f7t: '实时插入预览',
+      f7d: '弹窗底部实时展示将插入光标处的完整代码块（前后补空行）。',
+      s3title: '行号显示',
+      s3badge: '🚧 开发中 · 下个版本',
+      s3notice: '<b>开发中（Coming soon）：</b>以下为阶段三规划的交互示意，当前版本<b>尚未包含</b>该功能；演示效果不代表已发布行为。',
+      s3setHint: '设置页将新增下拉（三种模式）：',
+      optNone: '不显示（默认）',
+      optOriginal: '显示原行号',
+      optNew: '显示新行号',
+      demoCaption: '对照：<code>LINES: "56-58"</code>（源文件 main.cpp）',
+      wipFlag: '🚧 开发中',
+      demoOrig: '显示原行号 → <b>56 / 57 / 58</b>',
+      demoNew: '显示新行号 → <b>1 / 2 / 3</b>',
+      pt1: '<code>...</code> 省略行<b>不编号、不占号</b>（行号单元格留空）。',
+      pt2: '多段 LINES（如 <code>25,34,45-76</code>）新行号<b>跨段连续计数</b>。',
+      pt3: '仅对 <code>embed-&lt;lang&gt;</code> 块生效；普通代码块与 Obsidian 原生行为不受影响。',
+      pt4: '阅读视图与 live preview 均生效；配色走 Obsidian CSS 变量，浅色/深色主题自动适配。',
+      s4title: '特性总览',
+      s5themeHint: '本页右上角可切换浅色 / 深色主题预览——实际实现使用 Obsidian 主题 CSS 变量，自动跟随当前库主题。',
+      thFeature: '特性',
+      thStatus: '状态',
+      stReleased: '已发布',
+      stWip: '开发中',
+      ov1: '右键快速添加（菜单 + 弹窗）',
+      ov2: 'Vault 模糊搜索（Top 20 · 降序）',
+      ov3: '下拉溢出与长路径截断修复',
+      ov4: '路径输入框整行宽度',
+      ov5: '扩展名 → 语言自动匹配',
+      ov6: 'LINES 选区预填与组合语法',
+      ov7: 'TITLE 留空省略回退 PATH',
+      ov8: '实时插入预览',
+      ov9: '双语 README（中/英）',
+      ov10: '行号显示（原/新行号）',
+      linkRepo: 'GitHub 仓库',
+      linkUpstream: '上游项目 almariah/embed-code-file',
+      footerMade: '基于上游项目 <a href="https://github.com/almariah/embed-code-file" target="_blank" rel="noopener">almariah/embed-code-file</a> 的 fork 持续开发。',
+      footerNote: '本页为功能展示单页（原型示意），非插件运行界面。'
+    },
+    en: {
+      docTitle: 'Embed Code File - Obsidian Plugin',
+      themeBtn: 'Toggle light / dark',
+      heroTagline: 'Embed code files in your Obsidian notes — from the vault or remote sources (e.g. GitHub), with line selection, titles and line numbers.',
+      pillReleased: 'v1.3.0 · released',
+      pillWip: 'Line numbers · in development',
+      s1title: 'Core usage',
+      s1hint: 'Prefix the fence language with <code>embed-</code> and declare source & options as YAML key-value pairs (<code>PATH</code> required; <code>LINES</code> / <code>TITLE</code> optional).',
+      syntaxTitle: 'Syntax',
+      exVaultTitle: 'Example · vault file',
+      exRemoteTitle: 'Example · remote file (GitHub raw)',
+      langListTitle: 'Default languages',
+      langListDesc: 'Registered by default: <code>c,cs,cpp,java,python,go,ruby,javascript,js,typescript,ts,shell,sh,bash</code>. Customize via the <code>Included Languages</code> setting.',
+      s2title: 'Quick add via right-click',
+      s2badge: 'released in v1.3.0',
+      s2hint: 'Right-click inside the Markdown editor and choose <b>Add embed-code</b> to open the dialog — no hand-written YAML.',
+      f1t: 'Source switch',
+      f1d: 'Toggle 📁 Vault file / ☁️ Remote URL; remote mode points to raw links.',
+      f2t: 'Fuzzy search (top 20)',
+      f2d: 'Type to search vault files; top 20 matches sorted by <b>descending</b> score (sorting fixed in v1.3.0).',
+      f3t: 'Automatic vault:// prefix',
+      f3d: 'Selected or typed paths get the <code>vault://</code> prefix automatically.',
+      f4t: 'Extension-based language match',
+      f4d: 'After picking a file the language is matched from the extension: <code>.cpp→cpp</code>, <code>.ts→typescript</code>, <code>.py→python</code>, <code>.sh→bash</code>, etc.; no match keeps the current selection.',
+      f5t: 'LINES prefill & sets',
+      f5d: 'Selection lines are prefilled when entering via the menu (e.g. <code>5-12</code>); sets like <code>2,9,30-40</code> are supported; empty = all lines.',
+      f6t: 'TITLE fallback',
+      f6d: 'Empty TITLE omits the line; rendering falls back to PATH.',
+      f7t: 'Live insert preview',
+      f7d: 'The dialog previews the exact block to be inserted at the cursor (padded with blank lines).',
+      s3title: 'Line numbers',
+      s3badge: '🚧 in development · next release',
+      s3notice: '<b>In development (coming soon):</b> the following are phase-3 planning mockups; the current release does <b>not</b> include this feature yet. The demo does not imply shipped behavior.',
+      s3setHint: 'The settings page will add a dropdown (three modes):',
+      optNone: 'Hidden (default)',
+      optOriginal: 'Original line numbers',
+      optNew: 'New line numbers',
+      demoCaption: 'Side by side: <code>LINES: "56-58"</code> (source file main.cpp)',
+      wipFlag: '🚧 WIP',
+      demoOrig: 'Original → <b>56 / 57 / 58</b>',
+      demoNew: 'New → <b>1 / 2 / 3</b>',
+      pt1: '<code>...</code> ellipsis rows are <b>unnumbered and consume no number</b> (empty gutter cell).',
+      pt2: 'With multi-segment LINES (e.g. <code>25,34,45-76</code>), new numbers <b>continue across segments</b>.',
+      pt3: 'Applies to <code>embed-&lt;lang&gt;</code> blocks only; normal code blocks and native Obsidian behavior are unaffected.',
+      pt4: 'Works in reading view and live preview; colors use Obsidian CSS variables and adapt to light/dark themes.',
+      s4title: 'Feature overview',
+      s5themeHint: 'Use the button at the top right to preview light / dark — the actual build uses Obsidian theme CSS variables and follows the vault theme automatically.',
+      thFeature: 'Feature',
+      thStatus: 'Status',
+      stReleased: 'released',
+      stWip: 'in development',
+      ov1: 'Quick add via right-click (menu + dialog)',
+      ov2: 'Vault fuzzy search (top 20 · descending)',
+      ov3: 'Dropdown overflow & long-path truncation fix',
+      ov4: 'Full-width path input row',
+      ov5: 'Extension-based language match',
+      ov6: 'LINES prefill & set syntax',
+      ov7: 'TITLE omitted when empty, falls back to PATH',
+      ov8: 'Live insert preview',
+      ov9: 'Bilingual README (zh/en)',
+      ov10: 'Line numbers (original/new)',
+      linkRepo: 'GitHub repo',
+      linkUpstream: 'Upstream: almariah/embed-code-file',
+      footerMade: 'Continued development on a fork of upstream <a href="https://github.com/almariah/embed-code-file" target="_blank" rel="noopener">almariah/embed-code-file</a>.',
+      footerNote: 'This page is a feature showcase (mockup), not the plugin UI itself.'
+    }
+  };
+  var uiLang = 'zh';
+  try { if (localStorage.getItem('mockup-lang') === 'en') uiLang = 'en'; } catch (e) {}
+  function t(key) {
+    return (I18N[uiLang] && I18N[uiLang][key]) || I18N.zh[key] || '';
+  }
+  function applyLang() {
+    document.documentElement.lang = (uiLang === 'en') ? 'en' : 'zh-CN';
+    document.title = t('docTitle');
+    var els = document.querySelectorAll('[data-i18n]');
+    for (var i = 0; i < els.length; i++) els[i].textContent = t(els[i].getAttribute('data-i18n'));
+    var elsH = document.querySelectorAll('[data-i18n-html]');
+    for (var j = 0; j < elsH.length; j++) elsH[j].innerHTML = t(elsH[j].getAttribute('data-i18n-html'));
+  }
+  document.getElementById('langToggle').addEventListener('click', function () {
+    uiLang = (uiLang === 'zh') ? 'en' : 'zh';
+    try { localStorage.setItem('mockup-lang', uiLang); } catch (e) {}
+    applyLang();
+  });
+
+  /* ---------- 主题切换 ---------- */
+  document.getElementById('themeToggle').addEventListener('click', function () {
+    document.body.classList.toggle('light');
+  });
+
+  applyLang();
+})();
+</script>
+</body>
+</html>

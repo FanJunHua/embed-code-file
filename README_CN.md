@@ -1,6 +1,7 @@
 # Embed Code File（Obsidian 插件）
 
 [English](README.md) | 简体中文
+🎨 [✨ 功能展示](https://fanjunhua.github.io/embed-code-file/)
 
 本插件支持嵌入 Obsidian 仓库（vault）内的代码文件或远程文件（如 GitHub）。配合 Obsidian 的实时预览（live preview）功能，体验更佳。
 
