@@ -10,3 +10,82 @@
     margin-right:-9px!important;
     margin-bottom:9px!important;
 }
+
+/* ===== Add embed-code（g-003 右键快速添加）===== */
+.embed-add-modal .setting-item-control {
+    position: relative;
+}
+
+.embed-add-source-buttons {
+    display: flex;
+    gap: 6px;
+}
+
+.embed-add-suggest {
+    position: absolute;
+    top: calc(100% + 2px);
+    left: 0;
+    right: 0;
+    max-height: 220px;
+    overflow-y: auto;
+    background-color: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    box-shadow: var(--shadow-s);
+    z-index: var(--layer-popover, 30);
+}
+
+.embed-add-suggest-item {
+    padding: 4px 10px;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: var(--font-ui-smaller);
+}
+
+.embed-add-suggest-item.is-active {
+    background-color: var(--background-modifier-hover);
+    color: var(--text-normal);
+}
+
+.embed-add-suggest-path {
+    font-family: var(--font-monospace);
+    font-size: var(--font-ui-smaller);
+}
+
+.embed-add-preview {
+    margin: 0 0 12px;
+    padding: 10px 12px;
+    background-color: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    font-family: var(--font-monospace);
+    font-size: var(--font-ui-smaller);
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.embed-add-preview-line {
+    min-height: 1em;
+}
+
+.embed-add-preview-fence {
+    color: var(--text-faint);
+}
+
+.embed-add-preview-lang {
+    color: var(--interactive-accent);
+    font-weight: 600;
+}
+
+.embed-add-preview-key {
+    color: var(--color-purple, #b180d7);
+}
+
+.embed-add-preview-val {
+    color: var(--color-green, #4ec9b0);
+}
+
+.embed-add-preview-dim {
+    color: var(--text-faint);
+}

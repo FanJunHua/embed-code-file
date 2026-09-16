@@ -1,6 +1,7 @@
 import { Plugin, MarkdownRenderer, TFile, MarkdownPostProcessorContext, MarkdownView, parseYaml, requestUrl} from 'obsidian';
 import { EmbedCodeFileSettings, EmbedCodeFileSettingTab, DEFAULT_SETTINGS} from "./settings";
 import { analyseSrcLines, extractSrcLines} from "./utils";
+import { AddEmbedCodeModal } from "./add-embed-modal";
 
 export default class EmbedCodeFile extends Plugin {
 	settings: EmbedCodeFileSettings;
@@ -20,6 +21,20 @@ export default class EmbedCodeFile extends Plugin {
 			console.log(`registering renderer for ${l}`)
 			this.registerRenderer(l)
 		});
+
+		// editor context menu: quick "Add embed-code" (g-003)
+		this.registerEvent(
+			this.app.workspace.on('editor-menu', (menu, editor) => {
+				menu.addItem((item) => {
+					item
+						.setTitle('Add embed-code')
+						.setIcon('code-glyph')
+						.onClick(() => {
+							new AddEmbedCodeModal(this.app, this.settings, editor).open();
+						});
+				});
+			})
+		);
 	}
 
 	async loadSettings() {
