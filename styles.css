@@ -11,6 +11,58 @@
     margin-bottom:9px!important;
 }
 
+/* ===== 行号显示（g-005，规格见已批原型 docs/ui-mockup-line-numbers.html §2） ===== */
+/* 行号列位于代码块内部左侧、TITLE 标题条下方开始；
+   颜色/字体全部走 Obsidian CSS 变量，浅色/深色主题自动适配；
+   默认「不显示」时不添加 embed-has-line-numbers 类，DOM 与旧版完全一致（零回归）。 */
+.markdown-rendered pre.embed-has-line-numbers {
+    position: relative;      /* 行号列的定位锚 */
+    padding-left: 3.6em;     /* 为行号列腾出空间（按需覆盖主题左内边距） */
+}
+
+.markdown-rendered pre.embed-has-line-numbers .embed-line-gutter {
+    position: absolute;
+    left: 0;
+    top: 0;                  /* 运行时由 refreshLineGutter 按 rect 差值覆写 */
+    width: 3.2em;
+    text-align: right;       /* 数字右对齐 */
+    font-family: var(--font-monospace, monospace);  /* 运行时由 JS 按 code 计算样式全量覆写 */
+    font-size: var(--code-size, 0.95em);
+    color: var(--text-faint);
+    white-space: pre;        /* 逐行文本与代码行一一对齐（空行=省略行不编号） */
+    overflow: hidden;
+    user-select: none;       /* 复制代码不夹带行号 */
+    -webkit-user-select: none;
+    pointer-events: none;
+    box-sizing: border-box;
+}
+
+/* F-1（g-005）：行号开启的 embed 块禁止折行——阅读视图默认 white-space: pre-wrap 会让
+   一个逻辑行占多个视觉行，行号列按逻辑行绘制必然累积错位（负责人实测 codeHeight 1168px
+   vs 48 行 × 21px = 1008px，多出 160px ≈ 7.6 行）。仅作用于带 embed-has-line-numbers
+   的块（默认模式零回归）；长行改为横向滚动，行号列随内容滚动为已接受边界（归档 §10.4）。
+   F-2 加固：加 !important——负责人第二轮「行号不显示」的另一可能成因是主题以 !important
+   强制 pre-wrap，届时折行兜底会正确放弃绘制（宁缺不错），但用户仍看不到行号；本作用域内
+   用 !important + 更高特异性（类选择器多于主题的 pre code）确保禁折行生效，兜底仅作最后
+   防线。作用域仍限行号块，默认模式不受影响。 */
+.markdown-rendered pre.embed-has-line-numbers,
+.markdown-rendered pre.embed-has-line-numbers code {
+    white-space: pre !important;
+    overflow-wrap: normal !important;
+    word-break: normal !important;
+}
+
+.markdown-rendered pre.embed-has-line-numbers {
+    overflow-x: auto !important;
+}
+
+/* F-5（g-005）：行号改为「每个行号贴各自实测行 top 绝对定位」——容器高度由 JS 设为代码高度，
+   行号以 right:0 右对齐；行距由代码自身排版决定，不再有统一行距假设（消除累积漂移）。 */
+.markdown-rendered pre.embed-has-line-numbers .embed-line-number {
+    position: absolute;
+    right: 0;
+}
+
 /* ===== Add embed-code（g-003 右键快速添加）===== */
 .embed-add-modal .setting-item-control {
     position: relative;
