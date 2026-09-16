@@ -19,6 +19,16 @@ In the markdown editor, right-click to open the context menu and choose **Add em
 
 The plugin includes multiple languages by default (`c,cs,cpp,java,python,go,ruby,javascript,js,typescript,ts,shell,sh,bash`). You can add any language you need to the comma-separated list.
 
+### Line numbers (new in v1.4.0)
+
+Embedded code blocks can display line numbers. In the plugin settings, **Line Numbers** offers:
+
+* `Hide` (default) — no gutter, rendering identical to previous versions.
+* `Source line numbers` — numbers match the original file lines (`LINES: "29-32"` shows `29 30 31 32`).
+* `Renumbered` — displayed lines count from 1, continuously across multiple `LINES` segments.
+
+Each number is aligned to its own code line; wrapped continuation lines take no number, and omitted segments keep their `...` markers without numbers.
+
 ## How to use
 
 First you need to activate the plugin from Community Plugins. Then you can embed the code as follows:
