@@ -29,3 +29,6 @@ output/
 
 # Internal project docs (requirements/archives/analysis, local only, never commit)
 docs/
+
+# dsh-graph isolated worktrees (parallel attempt checkouts, never commit)
+.worktrees/
