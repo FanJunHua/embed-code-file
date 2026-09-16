@@ -2,6 +2,16 @@
 
 This plugin allows to embed code files from Obsidian vault or remote file (eg., GitHub). It works better with live preview feature of Obsidian.
 
+## Quick add via right-click
+
+In the markdown editor, right-click to open the context menu and choose **Add embed-code**:
+
+* A dialog opens where you can pick a **vault file** (type to fuzzy search, the `vault://` prefix is added automatically) or switch to a **remote URL** (for GitHub use a `https://raw.githubusercontent.com/...` link).
+* The language dropdown comes from the `Included Languages` setting. After picking a file, the language is matched automatically from the file extension (e.g. `.cpp` → `cpp`, `.js` → `javascript`, `.ts` → `typescript`, `.py` → `python`, `.sh` → `bash`). Extensions without a match keep the current selection.
+* `LINES` is prefilled with the lines selected in the editor (e.g. a selection on lines 5–12 → `5-12`). It supports combined sets like `2,9,30-40`; leave it empty to embed the whole file.
+* `TITLE` is optional; when left empty the field is omitted and the rendered block falls back to `PATH`.
+* The preview at the bottom shows the exact block that will be inserted at the cursor (padded with blank lines, empty fields omitted).
+
 ## Settings
 
 The plugin include multiple language by default (`c,cpp,java,python,go,ruby,javascript,js,typescript,ts,shell,sh,bash`). You can include any needed language to the comma separated list.
