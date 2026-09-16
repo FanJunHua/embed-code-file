@@ -12,3 +12,19 @@
   2. esbuild 0.14.47 CLI 重打包（production 配置）→ exit 0，22.8kb；
   3. 产物核验：`output/embed-code-file/` 三件套更新（main.js 23,326B / manifest.json 288B / styles.css 2,093B），并在 bundle 中确认存在降序比较器 `scored.sort((a, b) => b.score - a.score)`；
   4. 提交：fix(g-003) 至 g-003-att-01 分支。
+
+## F-2 建议下拉溢出 Modal 边界、长路径撑破容器且被裁切（来源：负责人实测 2026-09-16）
+
+- **现象**（负责人截图取证）：① 建议列表右边缘越过 Modal 边界，右半内容不可见，长路径显示为残段（如 `docs/GameHelper/Remot…`）且无省略号；② 列表项长路径（等宽、无空格）横向撑破容器；③ 下拉覆盖层压住「语言/行范围/标题」三行，候选看不清，模糊搜索实测不可用。
+- **原因**：下拉挂在路径行 `.setting-item-control` 内（add-embed-modal.ts），宽度被绑定为其宽度；Obsidian 部分版本该 control 为 `flex-shrink: 0` + 固定宽度，弹窗描述文案较长时被推出 Modal 内容区，锚点越界带动下拉整体越界；叠加列表项/路径 span 无 `white-space/overflow/text-overflow` 截断规则，长路径进一步横向溢出被 Modal 裁切。
+- **修复内容**（CSS/结构加固，功能逻辑零改动）：
+  1. add-embed-modal.ts：路径输入框包进 `position: relative` 的 wrapper `embed-add-path-wrap`（`controlEl.createDiv` 后 `appendChild(pathInput)` 移入），建议下拉改挂 wrapper 内（`left:0; right:0; top:calc(100% + 2px)`），与输入框左右对齐；
+  2. styles.css：`.embed-add-modal .setting-item-control` 补 `min-width:0; max-width:100%; overflow:visible`；新增 `.embed-add-path-wrap { position:relative; width:100%; min-width:0 }` 及其 `input[type="text"] { width:100% }`；
+  3. `.embed-add-suggest` 补 `overflow-x:hidden; max-width:100%`（保留 `max-height:220px; overflow-y:auto` 与 popover z-index）；
+  4. `.embed-add-suggest-item` 与 `.embed-add-suggest-path`（block 化）补 `white-space:nowrap; overflow:hidden; text-overflow:ellipsis`，长路径以 `…` 结尾不再撑破；
+  5. 下拉保持覆盖层定位（打字时临时覆盖下方字段、选择后消失），宽度约束为输入框宽度。
+- **验证结果**：
+  1. `node node_modules\typescript\bin\tsc --noEmit --skipLibCheck` → exit 0；
+  2. esbuild 0.14.47 CLI 重打包（production 配置）→ exit 0（22.9kb）；
+  3. 产物核验：`output/embed-code-file/` 三件套更新（main.js 23,432B / manifest.json 288B / styles.css 2,541B）；bundle 含 `embed-add-path-wrap` 结构、F-1 降序比较器保留；styles.css 规则落位自查：`text-overflow`×2、`overflow-x`×1、`min-width`×2、`max-width:100%`×2；
+  4. 提交：fix(g-003) 至 g-003-att-01 分支，待主管复核后由负责人复测同一位置截图确认。
