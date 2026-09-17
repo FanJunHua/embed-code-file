@@ -234,3 +234,54 @@ export function resolveLineTops(rawTops: (number | null)[]): { tops: number[]; p
 	}
 	return { tops, pitch }
 }
+
+/**
+ * F-6（g-007）：内容行数——文本按 '\n' 切分后去掉结尾空段（渲染器写入的尾部换行不产生内容行）。
+ * 供几何行距推算 (codeHeight − contentHeight) / (内容行数 − 1) 使用。
+ */
+export function contentLineCount(text: string): number {
+	const parts = text.split('\n')
+	if (parts.length && parts[parts.length - 1] === '') { return parts.length - 1 }
+	return parts.length
+}
+
+/**
+ * F-6（g-007）：从 getClientRects() 结果中取「第一个有实际宽度的 rect」。
+ * 负责人实机数据（blk0 第 2 行）：首个 rect 宽度为 0 且 top 等于上一行——Range 起点落在上一行
+ * '\n' 之后的文本节点边界上，F-5 直接取 rects[0] 便把该行画到了上一行的位置。本函数是第一道修复。
+ */
+export function pickFirstPositiveRect<T extends { top: number; width: number; height: number }>(rects: ArrayLike<T>): T | null {
+	for (let i = 0; i < rects.length; i++) {
+		if (rects[i].width > 0) { return rects[i] }
+	}
+	return null
+}
+
+/**
+ * F-6（g-007）：由 code 元素几何推算行盒行距。inline 的 <code> 其 rect 高度 =
+ * (内容行数 − 1) × 行距 + 字体内容盒高，故 行距 = (codeHeight − 上下 padding − contentHeight) / (内容行数 − 1)。
+ * 负责人实机三块零误差命中（375.2 / 1005.2 / 690.2 ↔ 22.5）。不可推算时返回 0。
+ */
+export function geometricLinePitch(codeHeight: number, paddingTop: number, paddingBottom: number, contentHeight: number, lines: number): number {
+	if (!isFinite(codeHeight) || !isFinite(contentHeight) || contentHeight <= 0) { return 0 }
+	if (!isFinite(lines) || lines < 2) { return 0 }
+	const pt = isFinite(paddingTop) ? paddingTop : 0
+	const pb = isFinite(paddingBottom) ? paddingBottom : 0
+	const p = (codeHeight - pt - pb - contentHeight) / (lines - 1)
+	return isFinite(p) && p > 0 ? p : 0
+}
+
+/**
+ * F-6（g-007）：行距取值链。清洗零宽 rect 后的逐行实测中位差是数据驱动的真值，优先采用；
+ * 几何推算、<pre> 计算行高（行盒的真正归属者）、<code> 计算行高、字号×1.5 依次兜底。
+ * 实机教训：<code> 的 computed line-height（19.6875）与 F-3 克隆探针（19.69）都不是行盒行距（22.5）。
+ */
+export function resolveLinePitch(input: { measured: number; geometric: number; preComputed: number; codeComputed: number; fontSize: number }): { pitch: number; source: string } {
+	const ok = (v: number) => isFinite(v) && v > 0
+	if (ok(input.measured)) { return { pitch: input.measured, source: 'measured' } }
+	if (ok(input.geometric)) { return { pitch: input.geometric, source: 'geometric' } }
+	if (ok(input.preComputed)) { return { pitch: input.preComputed, source: 'pre-line-height' } }
+	if (ok(input.codeComputed)) { return { pitch: input.codeComputed, source: 'code-line-height' } }
+	if (ok(input.fontSize)) { return { pitch: input.fontSize * 1.5, source: 'fontSize*1.5' } }
+	return { pitch: 21, source: 'fallback-21' }
+}

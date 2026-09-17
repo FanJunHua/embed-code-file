@@ -1,6 +1,6 @@
 import { Plugin, MarkdownRenderer, TFile, MarkdownPostProcessorContext, MarkdownView, parseYaml, requestUrl} from 'obsidian';
 import { EmbedCodeFileSettings, EmbedCodeFileSettingTab, DEFAULT_SETTINGS, LineNumberMode} from "./settings";
-import { analyseSrcLines, extractSrcLines, buildEmbedLineRows, buildFullFileRows, buildLineGutterPlan, resolveLineTops, EmbedLineRow, LineGutterPlan} from "./utils";
+import { analyseSrcLines, extractSrcLines, buildEmbedLineRows, buildFullFileRows, buildLineGutterPlan, resolveLineTops, contentLineCount, pickFirstPositiveRect, geometricLinePitch, resolveLinePitch, EmbedLineRow, LineGutterPlan} from "./utils";
 import { AddEmbedCodeModal } from "./add-embed-modal";
 
 export default class EmbedCodeFile extends Plugin {
@@ -170,16 +170,16 @@ export default class EmbedCodeFile extends Plugin {
 	}
 
 	/**
-	 * F-5：刷新行号列——**每个行号按它自己那一行的实测 top 绝对定位**。
+	 * F-6：刷新行号列——每个行号按**自己那一行的实测 top** 绝对定位，并把行号**字形**对齐到代码字形。
 	 * 演进脉络（每一步都由负责人实测数据定位）：
-	 * - F-1/F-2：用「内容高度算术」判折行 + 放弃绘制兜底 → 实测脆弱（13px 固定偏移 vs 半行
-	 *   容差 10.5px → 误判折行 → 行号被整体移除，连续 3 次后停手）。
-	 * - F-3/F-4：改为克隆探针实测行距 + 逐行视觉行数展开 → 行号能显示，但负责人第五轮指出
-	 *   「行号之间的间隔与代码行之间的间隔不一致」：探针测得 19.69px 与代码真实排版不符——
-	 *   **任何统一行距假设都会随时间累积漂移**。
-	 * - F-5：彻底放弃统一行距。用 Range 逐逻辑行测出该行首视觉行的 top，每个行号以绝对定位
-	 *   贴到自己那一行上；行距由代码自身排版决定，物理上不可能漂移。空行无 rect，由相邻已知
-	 *   top ± 中位行距外推补全；折行时行号贴首视觉行（续行不占号）依然正确。
+	 * - F-1/F-2：内容高度算术判折行 + 放弃兜底 → 13px 固定偏移撞破半行容差 → 行号被整体移除。
+	 * - F-3/F-4：克隆探针实测行距 + 视觉行数展开 → 探针 19.69px 与真实排版（22.5px）不符 → 仍漂移。
+	 * - F-5：逐行实测 top + 绝对定位（方向正确），但残留三类缺陷（g-007 实机诊断定位）：
+	 *   ①测量含「零宽 rect 属上一行」的污染；②行距取值错（45px 双倍行盒）；③把行号**盒顶**对齐到
+	 *   行的**文本 rect 顶**——字形在盒内居中，于是低了一个半行距（22.5 行距下 3.65px，肉眼可见）。
+	 * - F-6（本次）：①跳过零宽 rect + locate 边界改 `<`；②行距走三源取值链（清洗后实测中位差优先，
+	 *   几何推算 (codeH−contentH)/(内容行数−1) 兜底——实机三块零误差命中 22.5）；③定位改「行盒顶」
+	 *   = 文本 rect 顶 − 半行距，并叠加**字形级自校准**（行号文本 rect ↔ 代码行文本 rect）。
 	 * 标题注入、主题切换、resize、字体加载（经 ResizeObserver）都会重入，逻辑保持幂等收敛。
 	 */
 	refreshLineGutter(pre: HTMLPreElement) {
@@ -206,20 +206,43 @@ export default class EmbedCodeFile extends Plugin {
 
 		const codeRect = code.getBoundingClientRect();
 		const cs = getComputedStyle(code);
-		const fallbackPitch = parseFloat(cs.lineHeight) || (parseFloat(cs.fontSize) * 1.5) || 21;
+		const preCS = getComputedStyle(pre);
 
-		const resolved = resolveLineTops(this.measureLineTops(code, cells.length));
-		const pitch = resolved && resolved.pitch > 0 ? resolved.pitch : fallbackPitch;
+		// F-6：逐行实测（清洗零宽 rect）+ 字体内容盒高 + 内容行数 → 行距三源取值
+		const measured = this.measureCodeLines(code, cells.length);
+		const resolved = resolveLineTops(measured.tops);
+		const contentH = measured.contentHeight;
+		const geomPitch = geometricLinePitch(
+			codeRect.height,
+			parseFloat(cs.paddingTop) || 0,
+			parseFloat(cs.paddingBottom) || 0,
+			contentH,
+			measured.contentLines,
+		);
+		const chosen = resolveLinePitch({
+			measured: resolved ? resolved.pitch : 0,
+			geometric: geomPitch,
+			preComputed: parseFloat(preCS.lineHeight) || 0,
+			codeComputed: parseFloat(cs.lineHeight) || 0,
+			fontSize: parseFloat(cs.fontSize) || 0,
+		});
+		const pitch = chosen.pitch;
+		// F-6 半行距：文本 rect 顶 = 行盒顶 + (行距 − 字体内容盒高)/2，
+		// 故行号盒顶须落在行盒顶 = 文本 rect 顶 − 半行距（F-5 把盒顶直接对齐文本 rect 顶 → 偏低一个半行距）。
+		const halfLeading = contentH > 0 && pitch > contentH ? (pitch - contentH) / 2 : 0;
+
+		pre.dataset.lineGutterPitch = String(Math.round(pitch * 100) / 100);
+		pre.dataset.lineGutterPitchSource = chosen.source;
+		pre.dataset.lineGutterGeomPitch = String(Math.round(geomPitch * 100) / 100);
+		pre.dataset.lineGutterContentH = String(Math.round(contentH * 100) / 100);
 
 		// 容器与代码内容盒顶端对齐，高度取代码高度（子元素全部绝对定位，容器不参与流布局）
 		gutter.style.top = (codeRect.top - pre.getBoundingClientRect().top) + 'px';
 		gutter.style.height = codeRect.height + 'px';
 		gutter.textContent = '';
 
-		// F-5 自校准：首个行号落位后实测其盒顶相对目标 top 的偏差（字体半行距等），
-		// 全体行号按同一修正量上移——保证行号与代码行的内容盒严格对齐。
-		let correction = 0;
-		let calibrated = false;
+		const spans: HTMLElement[] = [];
+		const targets: number[] = [];
 		for (let i = 0; i < cells.length; i++) {
 			if (cells[i] === '') { continue }   // 省略行：不编号、不占号、不绘制
 			const targetTop = resolved ? resolved.tops[i] : (codeRect.top + i * pitch);
@@ -229,24 +252,54 @@ export default class EmbedCodeFile extends Plugin {
 			span.style.fontFamily = cs.fontFamily;
 			span.style.fontSize = cs.fontSize;
 			span.style.lineHeight = pitch + 'px';
-			span.style.top = (targetTop - codeRect.top - correction) + 'px';
+			span.style.top = (targetTop - codeRect.top - halfLeading) + 'px';
 			gutter.appendChild(span);
-			if (!calibrated) {
-				correction = span.getBoundingClientRect().top - targetTop;
-				if (Math.abs(correction) > 0.05) {
-					span.style.top = (targetTop - codeRect.top - correction) + 'px';
+			spans.push(span);
+			targets.push(targetTop);
+		}
+
+		// F-6 字形级自校准：测「行号自身文本 rect 顶 ↔ 该代码行文本 rect 顶」的偏差并全体补偿。
+		// F-5 的旧自校准测的是我们自己写进去的盒顶（恒为 0，空转），从未校准过字形位置。
+		let glyphDelta = 0;
+		if (spans.length) {
+			const d = this.measureGlyphDelta(spans[0], targets[0]);
+			if (isFinite(d) && Math.abs(d) > 0.05) {
+				glyphDelta = d;
+				for (const span of spans) {
+					const cur = parseFloat(span.style.top);
+					if (isFinite(cur)) { span.style.top = (cur - d) + 'px' }
 				}
-				calibrated = true;
 			}
 		}
+		pre.dataset.lineGutterGlyphDelta = String(Math.round(glyphDelta * 100) / 100);
 	}
 
 	/**
-	 * F-5：逐逻辑行测量该行**首视觉行**的 top（px，文档坐标）；空行/测量失败返回 null。
-	 * 与 F-4 的「视觉行数」不同，这里要的是每行自身的纵坐标——行号据此绝对定位，
-	 * 行距完全由代码实际排版决定（不再有统一 pitch 假设，也就不会累积漂移）。
+	 * F-6：测量行号 span 的**字形顶**（其文本 rect 顶）相对目标代码行文本 rect 顶的偏差（px）。
+	 * 这是唯一能反映「肉眼看到的行号与代码行是否齐平」的量（F-5 的盒顶比对是恒等式，无意义）。
 	 */
-	measureLineTops(code: HTMLElement, lineCount: number): (number | null)[] {
+	measureGlyphDelta(span: HTMLElement, codeLineTop: number): number {
+		try {
+			const range = document.createRange();
+			range.selectNodeContents(span);
+			const rect = pickFirstPositiveRect(range.getClientRects());
+			if (rect) { return rect.top - codeLineTop }
+		} catch (e) {
+			// 无法测量时不做补偿（半行距公式已提供一阶精度）
+		}
+		return 0;
+	}
+
+	/**
+	 * F-6：逐逻辑行测量该行**首视觉行**的 top（px，文档坐标），并返回字体内容盒高与内容行数。
+	 * 相对 F-5 修掉两处缺陷（均由负责人实机数据定位）：
+	 * 1) `locate` 边界改为 `<`：位置恰落在文本节点末尾（上一行 '\n' 的结尾）时，前进到下一节点起点
+	 *    （同一文档位置，但 Range 不再把上一行换行符纳入）；
+	 * 2) 取 rect 时**跳过宽度为 0 的 rect**（同症状的第二道防线，见 pickFirstPositiveRect）。
+	 * 实机症状：blk0 第 2 行首个 rect = {top: 96.22, width: 0}（上一行的 top），真实文本在 118.72；
+	 * 污染还会让相邻差出现 0/45，把中位行距抬成 45px（真实 22.5），行号被画进双倍高的行盒。
+	 */
+	measureCodeLines(code: HTMLElement, lineCount: number): { tops: (number | null)[]; contentHeight: number; contentLines: number } {
 		const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
 		const nodes: Text[] = [];
 		let text = '';
@@ -256,21 +309,29 @@ export default class EmbedCodeFile extends Plugin {
 			text += node.data;
 		}
 		const tops = new Array<number | null>(lineCount).fill(null);
-		if (!nodes.length) { return tops }
+		const parts = text.split('\n');
+		const contentLines = contentLineCount(text);
+		let contentHeight = 0;
+		if (!nodes.length) { return { tops, contentHeight, contentLines } }
 
 		const locate = (pos: number): { node: Text; offset: number } | null => {
 			let acc = 0;
-			for (const node of nodes) {
-				if (pos <= acc + node.data.length) { return { node, offset: pos - acc } }
+			for (let k = 0; k < nodes.length; k++) {
+				const node = nodes[k];
+				if (pos < acc + node.data.length) { return { node, offset: pos - acc } }
+				if (pos === acc + node.data.length) {
+					// F-6：边界位置前进到下一文本节点起点，避免 Range 把上一行的 '\n' 纳入
+					const next = nodes[k + 1];
+					return next ? { node: next, offset: 0 } : { node, offset: node.data.length };
+				}
 				acc += node.data.length;
 			}
 			return null;
 		};
 
 		const range = document.createRange();
-		const totalLines = text.split('\n').length;
 		let pos = 0;
-		for (let i = 0; i < lineCount && i < totalLines; i++) {
+		for (let i = 0; i < lineCount && i < parts.length; i++) {
 			const nl = text.indexOf('\n', pos);
 			const end = nl === -1 ? text.length : nl;
 			if (end > pos) {
@@ -280,8 +341,11 @@ export default class EmbedCodeFile extends Plugin {
 					try {
 						range.setStart(a.node, a.offset);
 						range.setEnd(b.node, b.offset);
-						const rects = range.getClientRects();
-						if (rects.length > 0) { tops[i] = rects[0].top }
+						const rect = pickFirstPositiveRect(range.getClientRects());
+						if (rect) {
+							tops[i] = rect.top;
+							if (contentHeight <= 0) { contentHeight = rect.height }
+						}
 					} catch (e) {
 						// 保守：保持 null（由相邻已知行外推补全）
 					}
@@ -289,7 +353,7 @@ export default class EmbedCodeFile extends Plugin {
 			}
 			pos = nl === -1 ? text.length : nl + 1;
 		}
-		return tops;
+		return { tops, contentHeight, contentLines };
 	}
 
 	/** F-3：内联 important 强制禁折行——内联 important 优先于任何作者样式表的 important。 */
