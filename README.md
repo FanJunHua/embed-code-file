@@ -29,6 +29,30 @@ Embedded code blocks can display line numbers. In the plugin settings, **Line Nu
 
 Each number is aligned to its own code line; wrapped continuation lines take no number, and omitted segments keep their `...` markers without numbers.
 
+### Hide code lines (new in v1.5.0)
+
+Hide source lines directly from the rendered block and persist the choice in the embed block:
+
+* With line numbers shown, **click a line number** to hide that line instantly, or **drag across several line numbers** and confirm with the floating **Hide selected lines** button (release with `Ctrl`/`Cmd` held to skip confirmation). Without line numbers, select code inside the block and use the floating button instead.
+* Each hidden segment renders as a single `...` marker (never one `...` per line).
+* A **Show all (N lines hidden)** button appears at the block's top-right corner, side by side with Obsidian's own copy/edit buttons, to reveal everything again.
+* Hidden lines are written back into the block as a `HIDE` key (undoable with `Ctrl+Z` in the editor):
+
+````yaml
+```embed-cpp
+PATH: "vault://Code/main.cpp"
+LINES: "164-208"
+HIDE: "182-194"
+TITLE: "Some title"
+```
+````
+
+* Commands: **Hide selected code lines** (`Ctrl/Cmd+Shift+H`) hides the lines under the current selection; **Show all (clear hidden lines)** clears the block's `HIDE`.
+
+### Interface language (new in v1.5.0)
+
+The plugin UI (settings, commands, notices, dialogs) follows Obsidian's language: Chinese for locales starting with `zh`, English otherwise. Reload the plugin after changing Obsidian's language to apply it.
+
 ## How to use
 
 First you need to activate the plugin from Community Plugins. Then you can embed the code as follows:
