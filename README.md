@@ -49,6 +49,13 @@ TITLE: "Some title"
 
 * Commands: **Hide selected code lines** (`Ctrl/Cmd+Shift+H`) hides the lines under the current selection; **Show all (clear hidden lines)** clears the block's `HIDE`.
 
+### Selection-driven visibility (new in v1.6.0)
+
+* **Show only selected lines** — in blocks without `LINES` (whole-file embeds), drag across several line numbers and pick **Show only selected lines** from the floating bar: the block is rewritten as `LINES: "<selection>"` (the `HIDE` key is removed if present). Undoable with `Ctrl+Z`. Also available as the command **Show only selected code lines**. Blocks that already have `LINES` keep the button hidden, so an existing `LINES` is never rewritten silently.
+* **Convert HIDE to LINES** — the command **Convert HIDE to LINES** (also in the editor context menu) rewrites `HIDE` back into an equivalent `LINES` value (identical rendering, `HIDE` key removed; a no-op for blocks without `HIDE`).
+* **Temporarily expand hidden segments** — each collapsed `...` segment shows a `▸` symbol in the line-number gutter (with line numbers off, click the `...` line itself). Clicking reveals the hidden lines in place as dimmed "ghost" rows — view-only, never written to the file; any re-render collapses them again. The expanded range is bracketed by `▾` (first row) and `▴` (last row); clicking either collapses it.
+* **Restore hidden lines while expanded** — inside an expanded segment, click a ghost row's number to restore that line, or drag across several and confirm with **Restore selected lines** (`Ctrl`/`Cmd`+drag skips confirmation). Restoring writes `LINES ∪ selection` and `HIDE − selection` in a single minimal diff (blocks without `LINES` never get a `LINES` key created).
+
 ### Interface language (new in v1.5.0)
 
 The plugin UI (settings, commands, notices, dialogs) follows Obsidian's language: Chinese for locales starting with `zh`, English otherwise. Reload the plugin after changing Obsidian's language to apply it.
