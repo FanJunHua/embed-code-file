@@ -102,6 +102,62 @@
     background-color: var(--background-modifier-hover);
 }
 
+/* ===== g-011 增量：LINES 写回浮层并列按钮 + dots 段临时展开 ===== */
+/* 「仅显示选中行」（embed-show-only-float）与「恢复选中行」（embed-restore-float）直接复用
+   .embed-hide-float 的全部样式，位置由 JS 按主按钮上下排布（fixed 定位，坐标运行时覆写）。 */
+
+/* dots 段展开/收起符号（行号格内的可点击 span；绝对定位坐标由 JS 按行号同款规则设置）。
+   不是 .embed-line-number，天然不进入行号拖选的 span 索引空间。 */
+.markdown-rendered pre.embed-has-line-numbers .embed-expand-toggle {
+    position: absolute;
+    right: 0;
+    cursor: pointer;
+    opacity: 0.8;
+}
+
+.markdown-rendered pre.embed-has-line-numbers .embed-expand-toggle:hover {
+    opacity: 1;
+    color: var(--text-normal);
+}
+
+/* g-011 实机修复：展开态收起符号（▾）叠加在首幽灵行的行号格**左侧**——展开后原 ▸ 所在的
+   dots 行已不存在，▾ 必须有新载体；与行号数字并排而不是替换行号（行号 span 是拖选映射
+   索引空间的权威，少一个 span 会让拖选/恢复选区的行号反查整体错位）。 */
+.markdown-rendered pre.embed-has-line-numbers .embed-expand-toggle.is-expanded {
+    right: auto;
+    left: 0.1em;
+    font-size: 0.85em;
+    opacity: 0.9;
+}
+
+.markdown-rendered pre.embed-has-line-numbers .embed-expand-toggle.is-expanded:hover {
+    opacity: 1;
+    color: var(--text-normal);
+}
+
+/* 行号关闭模式的 ▾ 浮层（挂在 pre 上，JS 绝对定位到首幽灵行左缘空白区；
+   pointer-events 仅符号本身，不遮挡代码文本，selectionRowRange 映射不受影响）。 */
+.embed-expand-floating {
+    position: absolute;
+    z-index: 2;
+    cursor: pointer;
+    opacity: 0.8;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.embed-expand-floating:hover {
+    opacity: 1;
+    color: var(--text-normal);
+}
+
+/* 展开态幽灵行（临时展开的隐藏行，纯视图态）：半透明 + 斜体做视觉区分。
+   只影响文字外观，不改变文本内容与偏移——选区映射与行号对齐依赖的是 textContent。 */
+.embed-ghost-line {
+    opacity: 0.62;
+    font-style: italic;
+}
+
 /* 行号列默认 pointer-events:none（复制不夹带行号），但选中隐藏需要块内任意点击都落在
    代码行上——否则点击行号区会让选区起点偏右，映射出错行。行号整列留空不可选，放开无副作用。 */
 .markdown-rendered pre.embed-has-line-numbers .embed-line-gutter {

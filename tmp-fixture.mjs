@@ -1,11 +1,12 @@
 // F-1 临时夹具（不提交）：行号列对齐/折行兜底的离线断言
 import { analyseSrcLines, extractSrcLines, buildEmbedLineRows, buildFullFileRows, buildLineGutterPlan, resolveLineTops, contentLineCount, pickFirstPositiveRect, geometricLinePitch, resolveLinePitch,
   normalizeLineRanges, subtractLineRanges, rangesToSpec, parseHideSpec, applyHideToRows, hasVisibleCodeRow,
-  rowsToSourceLineRanges, lineStartOffsets, selectionRowRange, collectSourceLineNums, lineNumsToRanges, updateHideInSection,
+  rowsToSourceLineRanges, rowsToSourceLineSpec, lineStartOffsets, selectionRowRange, collectSourceLineNums, lineNumsToRanges, updateHideInSection,
   gutterSpanSourceLineNums, gutterSpanRangeToSourceLineNums, clampGutterSpanRange,
-  applyHideToFullText, computeMinimalDiff, describeText, describeSectionInfo, describeInfoTextFlavor, describeFence, describeUpdate,
+  applyHideToFullText, updateLinesInSection, describeLinesUpdate, computeMinimalDiff, describeText, describeSectionInfo, describeInfoTextFlavor, describeFence, describeUpdate,
   mergeConsecutiveDots, computeHideAllButtonRight, isUsableButtonRect, DEFAULT_CORE_BUTTON_SELECTORS,
-  buildVisibleRowsForHide } from './utils.ts';
+  buildVisibleRowsForHide, findEmbedFenceBlocks, extractEmbedMetadata,
+  dotsSegmentsOfRows, dotsSegmentId, buildExpandedRows, ghostNumsFromExpanded, ghostStartNumsOfExpanded, ghostEndNumsOfExpanded, restoreCompute, linesSpecToRanges } from './utils.ts';
 import { normalizeLocale, initI18n, locale, t, tReason } from './i18n.ts';
 
 let fail = 0;
@@ -561,5 +562,200 @@ check(tReason('无法在全文里定位 embed 块（围栏扫描无候选且节�
 check(tReason('unchanged') === 'unchanged' && tReason('') === '' , '6e 未知 reason / 空 reason 透传');
 console.log('断言6 g-010 i18n 纯函数（语言链/缺键回退/占位/reason 映射）：' + (fail === failBase ? 'PASS' : 'FAIL'));
 failBase = fail;
+
+// ---------- 断言 7：g-011 LINES 写回（updateLinesInSection：插入/替换/删HIDE/CRLF/最小diff/幂等） ----------
+// 7a 插入：无 LINES → 插到 PATH 之后，clearHide 同时删 HIDE 行，其余行字节级不变
+const f7a = ['---', 'title: t', '---', '', F + 'embed-ts', 'PATH: "vault://a.ts"', 'HIDE: "3-4"', F, 'body', F, '', 'tail'].join('\n');
+const l7a = updateLinesInSection(f7a, '1-2', true, { start: 4, end: 7 }, { path: 'vault://a.ts', hideSpec: '3-4' });
+check(l7a.ok && l7a.changed && l7a.reason === 'inserted' && l7a.hideAction === 'removed', '7a 无 LINES → 插入 + 按 clearHide 删 HIDE');
+check(l7a.newText === ['---', 'title: t', '---', '', F + 'embed-ts', 'PATH: "vault://a.ts"', 'LINES: "1-2"', F, 'body', F, '', 'tail'].join('\n'), '7a LINES 插到 PATH 之后且 HIDE 行被移除（其余行字节级不变）');
+check(l7a.removedHideLine === 'HIDE: "3-4"' && !l7a.newText.includes('HIDE'), '7a removedHideLine 记录被删的 HIDE 行原文');
+
+// 7b 替换：已有 LINES → 原位替换，HIDE 未要求处理时原样保留，顺序不变
+const f7b = [F + 'embed-ts', 'PATH: "vault://b.ts"', 'LINES: "5-20"', 'HIDE: "8"', F, 'x', F].join('\n');
+const l7b = updateLinesInSection(f7b, '5-7,9-20', false, { start: 0, end: 5 }, { path: 'vault://b.ts' });
+check(l7b.ok && l7b.changed && l7b.reason === 'replaced' && l7b.keyLineIndex === 2 && l7b.hideAction === 'none', '7b 已有 LINES → 原位替换（HIDE 不动）');
+check(l7b.newText === [F + 'embed-ts', 'PATH: "vault://b.ts"', 'LINES: "5-7,9-20"', 'HIDE: "8"', F, 'x', F].join('\n'), '7b 只动 LINES 一行（顺序与其余行不变）');
+const l7b2 = updateLinesInSection([F + 'embed-ts', "LINES: '1-5'", F, 'x', F].join('\n'), '2-4', false, { start: 0 });
+check(l7b2.ok && l7b2.newText.includes("LINES: '2-4'"), '7b 单引号风格保留');
+
+// 7c LINES 已同值 + clearHide → 只删 HIDE 行（hide-removed-only）
+const l7c = updateLinesInSection(f7b, '5-20', true, { start: 0, end: 5 });
+check(l7c.ok && l7c.changed && l7c.reason === 'hide-removed-only' && l7c.removedHideLine === 'HIDE: "8"', '7c LINES 已同值但 clearHide → 只删 HIDE 行');
+check(l7c.newText === [F + 'embed-ts', 'PATH: "vault://b.ts"', 'LINES: "5-20"', F, 'x', F].join('\n'), '7c 删除后其余行不变（LINES 原样）');
+
+// 7d CRLF 保留：+LINES −HIDE 行数不变、新行带 \r、原有行尾不改写
+const crlf7 = ['---', F + 'embed-ts', 'PATH: "vault://c.ts"', 'HIDE: "2"', F, 'body', F].join('\r\n');
+const l7d = updateLinesInSection(crlf7, '1,3', true, { start: 1, end: 4 });
+check(l7d.ok && l7d.newText.indexOf('LINES: "1,3"\r\n') > 0 && !l7d.newText.includes('HIDE'), '7d CRLF：新行带 \\r 且 HIDE 行被删');
+check(l7d.newText.split('\r\n').length === crlf7.split('\r\n').length, '7d CRLF：行数不变（+LINES −HIDE）');
+// 7d-2 双键替换（增量 C 恢复语义）的 CRLF 保留（守卫④a）
+const crlf7b = [F + 'embed-ts', 'PATH: "vault://c2.ts"', 'LINES: "1-10"', 'HIDE: "3-4"', F, 'body', F].join('\r\n');
+const l7d2 = updateLinesInSection(crlf7b, '1-11', false, { start: 0, end: 5 }, { path: 'vault://c2.ts' }, '3');
+check(l7d2.ok && l7d2.hideAction === 'replaced' && l7d2.newText.indexOf('HIDE: "3"\r\n') > 0 && l7d2.newText.indexOf('LINES: "1-11"\r\n') > 0, '7d-2 CRLF 双键：LINES 替换 + HIDE 原位替换（\\r 保留）');
+check(l7d2.newText.split('\r\n').length === crlf7b.split('\r\n').length, '7d-2 CRLF 双键：行数不变（两行均原位替换）');
+
+// 7e 最小 diff：替换区间外逐字节一致（编辑器单次 replaceRange 保 Ctrl+Z 的前提）
+const d7 = computeMinimalDiff(f7b, l7c.newText);
+check(d7.changed && f7b.slice(0, d7.prefix) === l7c.newText.slice(0, d7.prefix) && f7b.slice(d7.oldSuffix) === l7c.newText.slice(d7.newSuffix), '7e 最小 diff：替换区间外原文/新文逐字节一致');
+// 7e-2 双键改动 = 一个连续替换区间（守卫④b：一次 replaceRange，而非两次写回）
+const dualBefore = [F + 'embed-ts', 'PATH: "vault://d.ts"', 'LINES: "1-10"', 'HIDE: "3-4"', F, 'body', F].join('\n');
+const dualPlan = updateLinesInSection(dualBefore, '1-11', false, { start: 0, end: 5 }, { path: 'vault://d.ts' }, '3');
+check(dualPlan.ok && dualPlan.changed && dualPlan.reason === 'replaced' && dualPlan.hideAction === 'replaced', '7e-2 双键：LINES 替换 + HIDE 替换');
+const dualDiff = computeMinimalDiff(dualBefore, dualPlan.newText);
+const dualOldRegion = dualBefore.slice(dualDiff.prefix, dualDiff.oldSuffix);
+const dualNewRegion = dualPlan.newText.slice(dualDiff.prefix, dualDiff.newSuffix);
+const dualKzStart = dualBefore.indexOf('LINES: "1-10"');
+const dualKzEnd = dualBefore.indexOf(F, dualBefore.indexOf('HIDE: "3-4"'));
+check(dualDiff.changed && dualOldRegion.length > 0 && dualDiff.prefix >= dualKzStart && dualDiff.oldSuffix <= dualKzEnd
+	&& !dualOldRegion.includes(F) && !dualOldRegion.includes('body') && !dualNewRegion.includes(F),
+	'7e-2 双键：单个连续替换区间只覆盖键区（一次 replaceRange 完成 LINES+HIDE 双改动）');
+check(dualBefore.slice(0, dualDiff.prefix) === dualPlan.newText.slice(0, dualDiff.prefix) && dualBefore.slice(dualDiff.oldSuffix) === dualPlan.newText.slice(dualDiff.newSuffix), '7e-2 双键：区间外逐字节一致');
+
+// 7f 定位失败 → ok=false 且不改文本（含 hideSpec 双键场景，守卫④a）
+const l7f = updateLinesInSection('纯文本无代码块', '1-2', true, { start: -1 });
+check(!l7f.ok && l7f.changed === false && l7f.newText === '纯文本无代码块', '7f 定位失败 → ok=false 且不改文本');
+const l7f2 = updateLinesInSection('纯文本无代码块', '1-2', false, { start: -1 }, undefined, '');
+check(!l7f2.ok && l7f2.newText === '纯文本无代码块', '7f 双键场景定位失败 → 同样不改文本');
+
+// 7g 空 LINES 拒绝写入
+const l7g = updateLinesInSection(f7b, '', true, { start: 0 });
+check(!l7g.ok && l7g.changed === false && l7g.newText === f7b, '7g 空 LINES 拒绝写入');
+
+// 7h 幂等：转换后再转 → no-op（LINES 已同值、HIDE 已删）
+const l7h1 = updateLinesInSection(f7b, '5-7,9-20', true, { start: 0, end: 5 });
+const l7h2 = updateLinesInSection(l7h1.newText, '5-7,9-20', true, { start: 0, end: 5 });
+check(l7h2.ok && !l7h2.changed && l7h2.reason === 'unchanged' && l7h2.newText === l7h1.newText, '7h 转换幂等：转换后再转 → no-op');
+
+// 7i 多块定位：命中第二个块，第一个块不动
+const two7 = [F + 'embed-ts', 'PATH: "vault://one.ts"', 'HIDE: "9"', F, 'a', F, '', F + 'embed-ts', 'PATH: "vault://two.ts"', F, 'b', F].join('\n');
+const l7i = updateLinesInSection(two7, '1-3', true, { start: 7, end: 10 }, { path: 'vault://two.ts' });
+check(l7i.ok && l7i.startLine === 7, '7i 多块：命中第二个块');
+check(l7i.newText.includes('HIDE: "9"') && l7i.newText.indexOf('LINES: "1-3"') > l7i.newText.indexOf('two.ts') && l7i.newText.indexOf('LINES: "1-3"') < l7i.newText.indexOf('\nb\n'), '7i 多块：第一个块原样、LINES 写进第二个块');
+
+// 7j describeLinesUpdate 日志字段完整
+const du7 = describeLinesUpdate(l7b);
+check(du7.ok === true && du7.oldLines === '5-20' && du7.newLines === '5-7,9-20' && du7.newLinesLine === 'LINES: "5-7,9-20"' && du7.hideAction === 'none', '7j describeLinesUpdate：日志描述字段完整');
+console.log('断言7 g-011 LINES 写回（插入/替换/删HIDE/CRLF/最小diff/双键单区间/幂等/多块）：' + (fail === failBase ? 'PASS' : 'FAIL'));
+failBase = fail;
+
+// ---------- 断言 8：g-011 增量 C（dots 段展开模型 + 恢复 spec 纯函数） ----------
+const cSrc = Array.from({ length: 250 }, (_, i) => 'SRC_' + (i + 1)).join('\n');
+
+// 8a dots 段识别：LINES 164-208 + HIDE 183-193 → 前导/隐藏/尾部三段（相邻可见行外推）
+const cRows = buildVisibleRowsForHide(cSrc, '164-208', '183-193').rows;
+const cSegs = dotsSegmentsOfRows(cRows, 250);
+check(!!cRows && cSegs.length === 3, '8a 三个 dots 段（前导/隐藏/尾部）');
+check(cSegs[0].start === 1 && cSegs[0].end === 163, '8a 前导段 = 1-163');
+check(cSegs[1].start === 183 && cSegs[1].end === 193, '8a HIDE 段 = 183-193');
+check(cSegs[2].start === 209 && cSegs[2].end === 250, '8a 尾部段 = 209-250');
+check(dotsSegmentId(cSegs[1]) === '183-193', '8a 段标识 = start-end');
+
+// 8b 展开：中段展开 → 真实行替换 dots；未展开间隙仍是恰好一个 dots
+const midId = dotsSegmentId(cSegs[1]);
+const cExpMid = buildExpandedRows(cSrc, cRows, new Set([midId]));
+check(cExpMid.some((r) => !r.dot && r.num === 183) && cExpMid.some((r) => !r.dot && r.num === 193), '8b 展开 HIDE 段：183..193 成为真实代码行');
+check(cExpMid.filter((r) => r.dot).length === 2, '8b 未展开的前导/尾部间隙仍是恰好一个 dots（2 个）');
+const cExpAll = buildExpandedRows(cSrc, cRows, new Set(cSegs.map((s) => dotsSegmentId(s))));
+check(cExpAll.every((r) => !r.dot) && cExpAll.length === 250 && cExpAll[0].num === 1 && cExpAll[249].num === 250, '8b 全部展开 → 1..250 全真实行、无 dots');
+
+// 8c 从基模型推导的展开/收起往返 + 展开重入幂等
+const cBack = buildExpandedRows(cSrc, cRows, new Set());
+check(JSON.stringify(cBack) === JSON.stringify(cRows) && cBack !== cRows, '8c 收起（空展开集，从基模型重推）= 原模型（往返恒等）');
+const cExpAgain = buildExpandedRows(cSrc, cExpMid, new Set([midId]));
+check(JSON.stringify(cExpAgain) === JSON.stringify(cExpMid), '8c 展开幂等：对已展开模型再推导同一展开集 → 恒等');
+
+// 8d 展开模型与行号计划逐行对齐（原/新行号两模式；alignCheck/textOfRows 为 5i 既有工具）
+check(alignCheck(cExpMid, 'original', 'orig') && alignCheck(cExpMid, 'new', 'new'), '8d 展开模型与行号计划逐行对齐（原/新两模式）');
+check(alignCheck(cExpAll, 'original', 'orig') && alignCheck(cExpAll, 'new', 'new'), '8d 全展开模型对齐（原/新两模式）');
+
+// 8e LINES 缺省 + HIDE 的整文件块：模型从 1 开始 → 唯一 dots 段恰为 HIDE 区间
+const dRows = buildVisibleRowsForHide(cSrc, undefined, '182-194').rows;
+const dSegs = dotsSegmentsOfRows(dRows, 250);
+check(!!dRows && dSegs.length === 1 && dSegs[0].start === 182 && dSegs[0].end === 194, '8e LINES 缺省块：唯一 dots 段 = HIDE 182-194');
+const dExp = buildExpandedRows(cSrc, dRows, new Set([dotsSegmentId(dSegs[0])]));
+check(dExp.filter((r) => r.dot).length === 0 && dExp.some((r) => !r.dot && r.num === 182) && dExp.some((r) => !r.dot && r.num === 194), '8e 展开后无 dots、182..194 全为真实行');
+
+// 8f 混合选区：只挑幽灵行（守卫①的纯函数口径；普通行不受影响）
+const mixed8 = ghostNumsFromExpanded([164, 181, 183, 190, 194, 196], new Set([midId]));
+check(JSON.stringify(mixed8) === JSON.stringify([183, 190]), '8f 混合选区 → 只恢复幽灵行 183/190');
+check(ghostNumsFromExpanded([164, 181], new Set([midId])).length === 0, '8f 纯普通行选区 → 无幽灵行（走既有隐藏语义）');
+check(ghostNumsFromExpanded([183], new Set()).length === 0, '8f 无展开态 → 恒为空（零回归）');
+
+// 8g restoreCompute 统一恢复语义
+const rc1 = restoreCompute('164-208', '183-193', [183, 184], 250);
+check(rc1.lines === '164-208' && rc1.hide === '185-193' && rc1.changed, '8g 双键：LINES∪选中 幂等不变、HIDE−选中 剩 185-193');
+const rc2 = restoreCompute('164-182,194-208', '183-193', [183, 184], 250);
+check(rc2.lines === '164-184,194-208' && rc2.hide === '185-193' && rc2.changed, '8g 双键：LINES 区间并入 183-184');
+const rc3 = restoreCompute(undefined, '182-194', [185, 186], 250);
+check(rc3.lines === null && rc3.hide === '182-184,187-194' && rc3.changed, '8g 仅 HIDE：lines=null（绝不创建 LINES 键）、HIDE 挖掉 185-186');
+const rc4 = restoreCompute('5-20', undefined, [21, 22], 250);
+check(rc4.lines === '5-22' && rc4.hide === '' && rc4.changed, '8g 仅 LINES：5-20∪21-22=5-22，HIDE 保持无');
+const rc5 = restoreCompute('5-20,45-60', undefined, [21, 44, 70, 71], 250);
+check(rc5.lines === '5-21,44-60,70-71' && rc5.changed, '8g 跨段：相邻选中区间分别并入两段、新段 70-71 追加');
+const rc6 = restoreCompute(rc1.lines, rc1.hide, [183, 184], 250);
+check(!rc6.changed && rc6.hide === '185-193' && rc6.lines === '164-208', '8g 幂等：恢复后再恢复 → changed=false');
+const rc7 = restoreCompute('1-10', '', [3, 4], 250);
+check(!rc7.changed, '8g 选中行本就可见 → changed=false（调用方 Notice 不写）');
+const rc8 = restoreCompute(undefined, '5-8', [7, 5, 5, 6], 250);
+check(rc8.hide === '8' && rc8.changed, '8g 乱序/重复 selected 归一化：5-7 全清、HIDE 剩 8');
+
+// 8h linesSpecToRanges 与 analyseSrcLines 同源
+check(JSON.stringify(linesSpecToRanges('5-20,45-60')) === JSON.stringify([{ start: 5, end: 20 }, { start: 45, end: 60 }]), '8h linesSpecToRanges：区间还原');
+check(linesSpecToRanges('abc').length === 0, '8h 非法 token 忽略');
+
+// 8i g-011 新增文案 zh/en 两表键面对齐（键在两表都存在 → t() 都不回退到 key 本身）
+const g11Keys = ['cmdShowOnlySelectedLines', 'cmdConvertHideToLines', 'menuConvertHideToLines',
+	'floatShowOnlySelected', 'floatShowOnlySelectedMany', 'floatShowOnlyTitle',
+	'floatRestoreSelected', 'floatRestoreSelectedMany', 'floatRestoreTitle',
+	'expandDotsTitle', 'collapseDotsTitle', 'collapseGhostTitle',
+	'noticeLinesAlreadySet', 'noticeNoHideToConvert', 'noticeEmptyVisibleSet',
+	'noticeShowOnlyOne', 'noticeShowOnlyMany', 'noticeConvertedToLines',
+	'noticeNoRestorableLines', 'noticeNothingToRestore', 'noticeRestoredOne', 'noticeRestoredMany', 'noticeExpandFailed',
+	'reasonEmptyLinesSpec'];
+initI18n(['zh']);
+const zhOk8 = g11Keys.every((k) => t(k) !== k);
+initI18n(['en']);
+const enOk8 = g11Keys.every((k) => t(k) !== k);
+check(zhOk8 && enOk8, '8i g-011 新增键 zh/en 两表对齐（不回退到 key 本身）');
+initI18n(['en']);
+check(tReason('LINES 值为空，已拒绝写入') === t('reasonEmptyLinesSpec'), '8i en 下 tReason 映射空 LINES reason');
+initI18n(['zh']);
+check(tReason('LINES 值为空，已拒绝写入') === 'LINES 值为空，已拒绝写入', '8i zh 下 tReason 与原文逐字一致（零回归）');
+console.log('断言8 g-011 增量 C（dots 段展开模型/恢复 spec 纯函数/i18n 对齐）：' + (fail === failBase ? 'PASS' : 'FAIL'));
+failBase = fail;
+
+// 8j 展开态收起符号定位（实机修复：展开后 dots 行消失，▾ 以首幽灵行为载体）
+// 单段：start=183 在展开模型中是真实行 → ▾ 落在行 183
+const gs1 = ghostStartNumsOfExpanded(cExpMid, new Set([midId]));
+check(gs1.size === 1 && gs1.get(183) === '183-193', '8j 单段：首幽灵行 183 → 段 id');
+// 多段 + 段首即文件首行（前导段 start=1 → ▾ 落在行 1）
+const gs2 = ghostStartNumsOfExpanded(cExpAll, new Set(cSegs.map((s) => dotsSegmentId(s))));
+check(gs2.size === 3 && gs2.get(1) === '1-163' && gs2.get(183) === '183-193' && gs2.get(209) === '209-250', '8j 多段 + 段首即文件首行（1-163 → 行 1）');
+// 陈旧 id / 模型漂移防御：start 不在当前模型（cRows 折叠态）→ 跳过，绝不误挂
+check(ghostStartNumsOfExpanded(cRows, new Set([midId])).size === 0, '8j start 不在当前模型 → 跳过（陈旧 id 防御）');
+check(ghostStartNumsOfExpanded(cExpMid, new Set()).size === 0, '8j 空展开集 → 恒空');
+console.log('断言8j 展开态收起符号定位（首幽灵行 = 段 start）：' + (fail === failBase ? 'PASS' : 'FAIL'));
+failBase = fail;
+
+// 8k 「▾首 + ▴末」括号式：末幽灵行 = 段 end（同构防御；单行段 start==end 由调用方去重）
+// 单段 3-5：start map → 行 3，end map → 行 5
+const kRows = buildVisibleRowsForHide(cSrc, '1-2,6-10', '3-5').rows;
+const kExp = buildExpandedRows(cSrc, kRows, new Set(['3-5']));
+check(ghostStartNumsOfExpanded(kExp, new Set(['3-5'])).get(3) === '3-5', '8k 单段 3-5：首符号落在行 3');
+check(ghostEndNumsOfExpanded(kExp, new Set(['3-5'])).get(5) === '3-5', '8k 单段 3-5：末符号落在行 5');
+// 多段 + 段末即文件末行（209-250 → end=250）
+const kEnds = ghostEndNumsOfExpanded(cExpAll, new Set(cSegs.map((s) => dotsSegmentId(s))));
+check(kEnds.size === 3 && kEnds.get(163) === '1-163' && kEnds.get(193) === '183-193' && kEnds.get(250) === '209-250', '8k 多段末幽灵行 163/193/250（含段末即文件末行）');
+// 陈旧 id 防御：end 不在当前模型（折叠态 cRows）→ 跳过
+check(ghostEndNumsOfExpanded(cRows, new Set([midId])).size === 0, '8k end 不在当前模型 → 跳过（陈旧 id 防御）');
+// 单行展开段 start==end：两映射同一行号——调用方据「starts.has(num)」只挂一个符号
+const sRows = buildVisibleRowsForHide(cSrc, '1-4,6-10', '5-5').rows;
+const sExp = buildExpandedRows(cSrc, sRows, new Set(['5-5']));
+const sStarts = ghostStartNumsOfExpanded(sExp, new Set(['5-5']));
+const sEnds = ghostEndNumsOfExpanded(sExp, new Set(['5-5']));
+check(sStarts.size === 1 && sEnds.size === 1 && sStarts.has(5) && sEnds.has(5) && sStarts.get(5) === '5-5' && sEnds.get(5) === '5-5', '8k 单行段 start==end：两映射同为行 5（去重输入）');
+check(ghostStartNumsOfExpanded(sExp, new Set()).size === 0 && ghostEndNumsOfExpanded(sExp, new Set()).size === 0, '8k 空展开集 → 恒空');
+console.log('断言8k 展开态括号式符号定位（末幽灵行 = 段 end / 单行段去重输入）：' + (fail === failBase ? 'PASS' : 'FAIL'));
 
 console.log(fail === 0 ? 'FIXTURE ALL PASS' : 'FIXTURE FAILED: ' + fail);

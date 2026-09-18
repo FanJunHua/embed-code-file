@@ -1,6 +1,6 @@
 import { Plugin, MarkdownRenderer, TFile, MarkdownPostProcessorContext, MarkdownView, Notice, Editor, parseYaml, requestUrl, moment} from 'obsidian';
 import { EmbedCodeFileSettings, EmbedCodeFileSettingTab, DEFAULT_SETTINGS, LineNumberMode} from "./settings";
-import { analyseSrcLines, extractSrcLines, buildEmbedLineRows, buildFullFileRows, buildLineGutterPlan, resolveLineTops, contentLineCount, pickFirstPositiveRect, geometricLinePitch, resolveLinePitch, EmbedLineRow, LineGutterPlan, LineRangeSet, normalizeLineRanges, applyHideToRows, hasVisibleCodeRow, rowsToSourceLineRanges, subtractLineRanges, rangesToSpec, parseHideSpec, lineStartOffsets, selectionRowRange, collectSourceLineNums, lineNumsToRanges, updateHideInSection, EmbedHideSpec, EmbedSelectionRows, gutterSpanSourceLineNums, gutterSpanRangeToSourceLineNums, clampGutterSpanRange, applyHideToFullText, computeMinimalDiff, contentTailOf, describeText, describeSectionInfo, describeInfoTextFlavor, describeFence, describeUpdate, computeHideAllButtonRight, DEFAULT_CORE_BUTTON_SELECTORS, buildVisibleRowsForHide } from "./utils";
+import { analyseSrcLines, extractSrcLines, buildEmbedLineRows, buildFullFileRows, buildLineGutterPlan, resolveLineTops, contentLineCount, pickFirstPositiveRect, geometricLinePitch, resolveLinePitch, EmbedLineRow, LineGutterPlan, LineRangeSet, LineRangeSegment, normalizeLineRanges, lineInRanges, applyHideToRows, hasVisibleCodeRow, rowsToSourceLineRanges, rowsToSourceLineSpec, subtractLineRanges, rangesToSpec, parseHideSpec, lineStartOffsets, charOffsetToLineIndex, selectionRowRange, collectSourceLineNums, lineNumsToRanges, updateHideInSection, EmbedHideSpec, EmbedSelectionRows, gutterSpanSourceLineNums, gutterSpanRangeToSourceLineNums, clampGutterSpanRange, applyHideToFullText, updateLinesInSection, HideUpdatePlan, LinesUpdatePlan, computeMinimalDiff, contentTailOf, describeText, describeSectionInfo, describeInfoTextFlavor, describeFence, describeUpdate, describeLinesUpdate, computeHideAllButtonRight, DEFAULT_CORE_BUTTON_SELECTORS, buildVisibleRowsForHide, dotsSegmentsOfRows, dotsSegmentId, EmbedDotsSegment, buildExpandedRows, ghostNumsFromExpanded, ghostStartNumsOfExpanded, ghostEndNumsOfExpanded, restoreCompute } from "./utils";
 import { AddEmbedCodeModal } from "./add-embed-modal";
 import { initI18n, t, tReason } from "./i18n";
 
@@ -144,18 +144,16 @@ export default class EmbedCodeFile extends Plugin {
 			}
 			let hideApplied: LineRangeSet = hideRanges
 
-			// 行号显示（g-005）：默认 none 不建模型=与旧版渲染产物完全一致（零回归）。
+			// 行号显示（g-005）：默认 none 不绘制行号列=与旧版渲染产物完全一致（零回归）。
+			// g-011 增量 C：行模型**无条件构建**（展开/恢复等模型派生功能在行号关闭模式下也要工作，
+			// 与 g-009「模型与设置解耦」同一原则）；行号列的绘制仍按设置门控。
 			// 行号模型必须在 extractSrcLines 之前、对同一初始数组构建（buildEmbedLineRows
 			// 内部在副本上重放同样的遍历），正文与行号列才能严格逐行对齐。
 			const lineNumberMode: LineNumberMode = this.settings.lineNumbers
-			let lineRows: EmbedLineRow[] | null = null
-			let activeLineNumberMode: 'original' | 'new' | null = null
-			if (lineNumberMode !== 'none') {
-				activeLineNumberMode = lineNumberMode
-				lineRows = srcLinesNum.length > 0
-					? buildEmbedLineRows(fullSrc, srcLinesNum)
-					: buildFullFileRows(fullSrc)
-			}
+			const lineRows: EmbedLineRow[] = srcLinesNum.length > 0
+				? buildEmbedLineRows(fullSrc, srcLinesNum)
+				: buildFullFileRows(fullSrc)
+			const activeLineNumberMode: 'original' | 'new' | null = lineNumberMode !== 'none' ? lineNumberMode : null
 
 			// 正文的渲染行模型：HIDE 生效时必须建（与设置里的行号显示解耦——g-009 的选区映射、
 			// 行号编号都依赖它），HIDE 未生效时保持 v1.4.1 的既有路径（零回归）。
@@ -167,6 +165,9 @@ export default class EmbedCodeFile extends Plugin {
 			// 由区间集合重建后，段间/隐藏处一律恰好一个 `...`，且与行号模型同源对齐。
 			const srcLines = fullSrc.split('\n')
 			const renderRows: EmbedLineRow[] | null = hidePlan.rows
+			// g-011：行号列实际使用的模型（HIDE 生效时必须由渲染模型派生，行数才与正文一致）；
+			// lineRows 本体保持为「完整行模型」，供 dataset.embedLineRows 在无 HIDE 时挂载
+			let gutterRows: EmbedLineRow[] = lineRows
 
 			if (srcLinesNum.length == 0) {
 				src = fullSrc
@@ -176,10 +177,8 @@ export default class EmbedCodeFile extends Plugin {
 			if (renderRows) {
 				// 行模型 ⟺ 渲染行文本：用行模型（源行号）重建正文，HIDE 与既有 `...` 同源
 				src = renderRows.map((r) => (r.dot ? '...' : (srcLines[r.num - 1] ?? ''))).join('\n')
-				if (lineRows) {
-					// 行号列与正文逐行对齐：行号模型必须**由同一份渲染模型派生**（行数一致）
-					lineRows = renderRows.slice()
-				}
+				// 行号列与正文逐行对齐：行号模型必须**由同一份渲染模型派生**（行数一致）
+				gutterRows = renderRows.slice()
 			}
 
 			let title = metaYaml.TITLE
@@ -194,6 +193,10 @@ export default class EmbedCodeFile extends Plugin {
 			el.dataset.embedPath = srcPath
 			if (srcLinesNum.length > 0) { el.dataset.embedLines = String(srcLinesNumString) } else { delete el.dataset.embedLines }
 			el.dataset.embedTail = contentTailOf(src)
+			// g-011 增量 C：展开重建所需的块参数（fence 语言 / 标题 / 源文件总行数）
+			el.dataset.embedLang = lang
+			el.dataset.embedTitle = String(title ?? '')
+			el.dataset.embedTotalLines = String(fullSrcLineCount)
 			if (modelRows) {
 				el.dataset.embedLineRows = JSON.stringify(modelRows)
 			}
@@ -206,12 +209,19 @@ export default class EmbedCodeFile extends Plugin {
 			if (activeView) { this.lastEditorCtx = { editor: activeView.editor, file: activeView.file } }
 
 			await MarkdownRenderer.renderMarkdown('```' + lang + '\n' + src + '\n```', el, '', this)
-			if (lineRows && activeLineNumberMode) {
+			// g-011 增量 C（守卫②a）：源文本缓存以渲染为唯一刷新点——渲染收尾必刷新，展开时只读不回源
+			this.embedSources.set(el, fullSrc)
+			if (activeLineNumberMode) {
 				// 单点覆盖阅读视图与 live preview（两视图都经本 code-block processor 渲染）
-				this.addLineNumbers(el, lineRows, activeLineNumberMode)
+				this.addLineNumbers(el, gutterRows, activeLineNumberMode)
 			}
 			this.addTitleLivePreview(el, title);
 			this.refreshHideAllButton(el);
+			// g-011 增量 C：行号关闭模式没有行号格可放展开符号 → 把 `...` 行本身作为等效点击入口
+			if (!activeLineNumberMode) {
+				this.attachDotsClickTarget(el)
+				this.positionExpandToggles(el)
+			}
 
 			if (hideRanges.length && renderRows) {
 				console.log(`[embed-code-file][g-009] HIDE 生效：可见 ${hideApplied.length} 段 / 渲染 ${renderRows.length} 行（连续省略已合并为单个 ...）`)
@@ -234,12 +244,28 @@ export default class EmbedCodeFile extends Plugin {
 	/** 最近活跃的 Markdown 编辑器；观察器捕获阶段优先用事件里的 editor。 */
 	private lastEditorCtx: { editor: Editor; file: TFile | null } | null = null;
 	private hideFloatBtn: HTMLElement | null = null;
+	/** g-011：浮层并列按钮「仅显示选中行」（仅 LINES 缺省的块随主按钮一同创建） */
+	private showOnlyFloatBtn: HTMLElement | null = null;
 	private hideFloatTarget: HTMLElement | null = null;
 	private hideUiDisposers: (() => void)[] = [];
 	/** g-009 增量：行号列拖选态（单击=起点=终点；拖选=起点..当前） */
 	private gutterDrag: { gutter: HTMLElement; el: HTMLElement; spans: HTMLElement[]; start: number; end: number } | null = null;
 	/** 拖选期间被抑制的行号列刷新（鼠标释放后补做，避免拖到一半 DOM 被换掉） */
 	private pendingGutterRefresh = new Set<HTMLPreElement>();
+	/* ======================= g-011 增量 C：dots 段临时展开（纯视图态） =======================
+	 * 展开状态是**元素级**会话状态：键为 embed 块根元素，值为已展开段 id（源行区间 start-end）集合。
+	 * 文件变更重渲染会产生新元素 → 状态随元素回收自然清空（自动收起），绝不写文件。
+	 */
+	private expandedSegments = new WeakMap<HTMLElement, Set<string>>();
+	/** 首次展开前的基模型快照：重建一律从「基模型 ∪ 仍展开段」推导（否则收起后 dots 已从当前
+	 *  模型消失，无法还原）；元素即生命周期，写回重渲染产生新元素后自然重建快照。 */
+	private expandedBaseRows = new WeakMap<HTMLElement, EmbedLineRow[]>();
+	/** 异步重建进行中的块（防重入：期间忽略再次点击/选区触发的展开） */
+	private expandingBlocks = new WeakSet<HTMLElement>();
+	/** 渲染收尾缓存的源文本（展开重建的正文来源；守卫②a：渲染为唯一刷新点，展开只读不回源） */
+	private embedSources = new WeakMap<HTMLElement, string>();
+	/** 浮层第三个按钮「恢复选中行」（展开态且选区含幽灵行时出现） */
+	private restoreFloatBtn: HTMLElement | null = null;
 
 	onunload() {
 		this.clearGutterSelection();
@@ -313,6 +339,30 @@ export default class EmbedCodeFile extends Plugin {
 			}
 		});
 
+		// g-011 功能 A：仅显示选中的代码行（写 LINES=选区 + 移除 HIDE；块已有 LINES 时 Notice 不动作）
+		this.addCommand({
+			id: 'show-only-selected-lines',
+			name: t('cmdShowOnlySelectedLines'),
+			checkCallback: (checking: boolean) => {
+				const embed = this.resolveEmbedFromEditor();
+				if (!embed) { return false }
+				if (!checking) { this.showOnlySelectedLines(embed.el) }
+				return true
+			}
+		});
+
+		// g-011 功能 B：将 HIDE 转为 LINES（可见集合恒等的纯源码重构）
+		this.addCommand({
+			id: 'convert-hide-to-lines',
+			name: t('cmdConvertHideToLines'),
+			checkCallback: (checking: boolean) => {
+				const embed = this.resolveEmbedFromEditor();
+				if (!embed) { return false }
+				if (!checking) { this.convertHideToLines(embed.el) }
+				return true
+			}
+		});
+
 		// 编辑器右键菜单（与 g-003 的 Add embed-code 并列）；移动端由 Obsidian 的
 		// 「更多选项」菜单呈现同一 editor-menu 项。
 		this.registerEvent(
@@ -329,6 +379,12 @@ export default class EmbedCodeFile extends Plugin {
 					.setIcon('eye')
 					.setDisabled(!hasHidden)
 					.onClick(() => { this.clearHiddenLinesFromResolved(embed) }));
+				// g-011 功能 B：右键菜单同名项（与既有两项并列；无 HIDE 的块禁用）
+				menu.addItem((item) => item
+					.setTitle(t('menuConvertHideToLines'))
+					.setIcon('list')
+					.setDisabled(!hasHidden)
+					.onClick(() => { this.convertHideToLines(embed.el) }));
 			})
 		);
 	}
@@ -344,6 +400,345 @@ export default class EmbedCodeFile extends Plugin {
 			return;
 		}
 		this.hideSelectionFromResolved(info);
+	}
+
+	/* ======================= g-011：仅显示选中行（写 LINES）/ HIDE 转 LINES ======================= */
+
+	/**
+	 * 该块是否已有 LINES 键（渲染期只在 LINES 有值时挂 dataset.embedLines，缺省/空值都会删掉它）。
+	 * 这是「LINES 是否缺省」的可靠判据：已有 LINES 的块绝不静默改写（不出现「仅显示选中行」）。
+	 */
+	embedHasLinesKey(el: HTMLElement): boolean {
+		return !!(el.dataset.embedLines || '').trim();
+	}
+
+	/**
+	 * 命令入口：仅显示选中的代码行（g-011 功能 A）。与浮层按钮等效：
+	 * 选区 → 源行号 → 写 LINES=<选区 spec> 并同时移除 HIDE；块已有 LINES 时 Notice 不动作。
+	 */
+	showOnlySelectedLines(el: HTMLElement) {
+		const info = this.resolveSelectionHide();
+		if (!info || info.el !== el) {
+			new Notice(t('noticeSelectInEmbedFirst'));
+			return;
+		}
+		this.showOnlySelectionFromResolved(info);
+	}
+
+	showOnlySelectionFromResolved(resolved: { el: HTMLElement | null; rows: EmbedLineRow[]; nums: number[] } | null) {
+		if (!resolved || !resolved.el) { new Notice(t('noticeNoValidSelection')); return }
+		const { el, nums } = resolved;
+		if (!nums.length) { new Notice(t('noticeSelectionOnlyDots')); return }
+		this.showOnlyLinesFromGutter(el, nums);
+	}
+
+	/**
+	 * 「仅显示选中行」唯一写入口（浮层按钮与命令共用）：nums 必须来自**当前可见代码行**
+	 * （resolveSelectionHide/collectSourceLineNums 已保证：dots 行与已隐藏行不产生行号）。
+	 * 空选区/选区全在 dots 行 → Notice 不写；最终写回 LINES=<选区> + 移除 HIDE。
+	 */
+	showOnlyLinesFromGutter(el: HTMLElement, nums: number[]) {
+		if (this.embedHasLinesKey(el)) { new Notice(t('noticeLinesAlreadySet')); return }
+		const rows = this.readEmbedRows(el);
+		if (!rows || !rows.length) { new Notice(t('noticeCannotReadRowModel')); return }
+		if (!nums.length) { new Notice(t('noticeSelectionOnlyDots')); return }
+		const spec = rangesToSpec(lineNumsToRanges(nums), Number.MAX_SAFE_INTEGER);
+		if (!spec.trim()) { new Notice(t('noticeSelectionOnlyDots')); return }
+		const msg = nums.length === 1 ? t('noticeShowOnlyOne', { n: nums[0] }) : t('noticeShowOnlyMany', { n: nums.length });
+		this.applyLinesValue(el, spec, true, msg);
+	}
+
+	/**
+	 * 命令/右键菜单入口：把当前 HIDE 折叠进 LINES（g-011 功能 B）。
+	 * 可见集合取该块**当前渲染行模型**（dataset.embedLineRows；LINES 缺省按整文件计算，
+	 * HIDE 已在渲染期减过一轮）→ rowsToSourceLineSpec，转换前后渲染行模型逐行一致。
+	 */
+	convertHideToLines(el: HTMLElement) {
+		if (!(el.dataset.embedHideSpec || '').trim()) { new Notice(t('noticeNoHideToConvert')); return }
+		const rows = this.readEmbedRows(el);
+		if (!rows || !rows.length) { new Notice(t('noticeCannotReadRowModel')); return }
+		const visibleSpec = rowsToSourceLineSpec(rows);
+		if (!visibleSpec.trim()) { new Notice(t('noticeEmptyVisibleSet')); return }
+		this.applyLinesValue(el, visibleSpec, true, t('noticeConvertedToLines'));
+	}
+
+	/* ---------- g-011 增量 C：展开状态机 + 恢复写回 ---------- */
+
+	/** 源文件总行数（渲染期挂在 dataset；缺失/非法 → 0，调用方按不可用处理）。 */
+	embedTotalLines(el: HTMLElement): number {
+		const n = Number(el.dataset.embedTotalLines ?? '0');
+		return isFinite(n) && n > 0 ? n : 0;
+	}
+
+	/** 该块已展开段 id 集合（懒创建；元素即生命周期，重渲染自动为新空集）。 */
+	private expandedIdsOf(el: HTMLElement): Set<string> {
+		let s = this.expandedSegments.get(el);
+		if (!s) { s = new Set<string>(); this.expandedSegments.set(el, s) }
+		return s;
+	}
+
+	/** 选中行号里的幽灵行（落在已展开段区间内的行；纯函数 ghostNumsFromExpanded 的薄包装）。 */
+	private ghostNumsOf(el: HTMLElement, nums: number[]): number[] {
+		const ids = this.expandedSegments.get(el);
+		if (!ids || !ids.size) { return [] }
+		return ghostNumsFromExpanded(nums, ids);
+	}
+
+	private isGhostLine(el: HTMLElement, num: number): boolean {
+		return this.ghostNumsOf(el, [num]).length > 0;
+	}
+
+	/**
+	 * 展开/收起一个 dots 段（纯视图态切换）。展开 = 用扩展行模型重建块内容
+	 * （buildExpandedRows 为单一事实来源，正文/行号/选区映射全部经既有函数派生）；
+	 * 异步重建期间置 expanding 标志防重入，完成/失败都清标志（失败回滚状态 + Notice + warn）。
+	 */
+	async toggleDotsSegment(el: HTMLElement, segId: string) {
+		if (this.expandingBlocks.has(el)) { return }
+		const rowsNow = this.readEmbedRows(el);
+		if (!rowsNow || !rowsNow.length) { new Notice(t('noticeCannotReadRowModel')); return }
+		// 首次展开前快照基模型（收起/混合展开都从它重推，dots 才能还原）
+		if (!this.expandedBaseRows.has(el)) { this.expandedBaseRows.set(el, rowsNow) }
+		const ids = this.expandedIdsOf(el);
+		const wasExpanded = ids.has(segId);
+		if (wasExpanded) { ids.delete(segId) } else { ids.add(segId) }
+		this.expandingBlocks.add(el);
+		try {
+			await this.rebuildBlockContent(el);
+		} catch (e) {
+			// 失败回滚展开态，避免「符号显示已展开但内容没变」的错位；绝不静默按 PATH 回源拉取
+			if (wasExpanded) { ids.add(segId) } else { ids.delete(segId) }
+			console.warn('[embed-code-file][g-011] 展开重建失败（已回滚）', { segId, wasExpanded, error: String(e) });
+			new Notice(t('noticeExpandFailed'));
+		} finally {
+			this.expandingBlocks.delete(el);
+		}
+	}
+
+	/**
+	 * 用扩展行模型重建块内容（走与渲染处理器相同的后处理序列，逐项核对不遗漏）：
+	 * 清空旧渲染产物 → renderMarkdown fence → addLineNumbers（设置开启时）→ addTitleLivePreview
+	 * → refreshHideAllButton；行号关闭模式再挂 `...` 行点击入口。
+	 * 单一事实来源：正文 src、行号计划、dataset.embedLineRows 全部由 buildExpandedRows 的结果派生，
+	 * 不做任何 DOM 补丁（保护 g-005/g-007 行号对齐机制）。
+	 */
+	private async rebuildBlockContent(el: HTMLElement): Promise<void> {
+		const srcText = this.embedSources.get(el);
+		if (srcText === undefined) {
+			// 守卫②b：缓存缺失（理论上不该发生）→ 放弃展开，绝不静默按 PATH 重新拉源（URL 源会走网络）
+			throw new Error('embed 源文本缓存缺失');
+		}
+		const rowsNow = this.readEmbedRows(el);
+		if (!rowsNow || !rowsNow.length) { throw new Error('行模型缺失') }
+		// 单一事实来源：从「基模型 ∪ 仍展开段」推导（收起后 dots 才能从基模型还原）
+		const base = this.expandedBaseRows.get(el) ?? rowsNow;
+		const expanded = buildExpandedRows(srcText, base, this.expandedIdsOf(el));
+		const lang = el.dataset.embedLang ?? 'txt';
+		const title = el.dataset.embedTitle ?? '';
+		const mode = this.settings.lineNumbers;
+
+		// 正文由扩展模型派生（与渲染处理器 HIDE 路径同一写法：dots ↔ '...'，代码行按源行号回填）
+		const srcLines = srcText.split('\n');
+		const srcView = expanded.map((r) => (r.dot ? '...' : (srcLines[r.num - 1] ?? ''))).join('\n');
+
+		// 清空旧渲染产物（保留块根元素自身：dataset / ctx / WeakMap 状态都挂在它上面）
+		el.querySelectorAll('pre').forEach((n) => n.remove());
+
+		await MarkdownRenderer.renderMarkdown('```' + lang + '\n' + srcView + '\n```', el, '', this);
+		el.dataset.embedLineRows = JSON.stringify(expanded);
+		if (mode !== 'none') {
+			this.addLineNumbers(el, expanded, mode as 'original' | 'new');
+		}
+		if (title) { this.addTitleLivePreview(el, title) }
+		this.refreshHideAllButton(el);
+		if (mode === 'none') {
+			this.attachDotsClickTarget(el)
+			// g-011 修复：行号关闭模式的收起符号（展开段首幽灵行左缘的浮层 ▾）
+			this.positionExpandToggles(el)
+		}
+		// 展开行视觉区分：给幽灵行的文本范围套上 CSS 类（纯展示层包装，textContent 不变，
+		// 选区映射/行号对齐依赖的文本内容与偏移不受影响；从最后一行往前包，避免偏移失效）
+		this.markGhostLines(el, expanded);
+	}
+
+	/** 幽灵行的视觉区分：把已展开段内的代码行文本包进 .embed-ghost-line（倒序处理防偏移失效）。 */
+	private markGhostLines(el: HTMLElement, rows: EmbedLineRow[]) {
+		const ids = this.expandedSegments.get(el);
+		if (!ids || !ids.size) { return }
+		const ghost = this.ghostNumsOf(el, rows.filter((r) => !r.dot).map((r) => r.num));
+		if (!ghost.length) { return }
+		const ghostSet = new Set<number>(ghost);
+		const codeEl = el.querySelector('pre > code') as HTMLElement | null;
+		if (!codeEl) { return }
+		const { nodes, text } = this.collectCodeText(codeEl);
+		if (!nodes.length) { return }
+		const offsets = lineStartOffsets(text, rows.length);
+		const range = document.createRange();
+		for (let i = rows.length - 1; i >= 0; i--) {
+			const row = rows[i];
+			if (row.dot || !ghostSet.has(row.num)) { continue }
+			const start = offsets[i];
+			// 行内容终点：下一行行首（或文末）；空行没有内容可包，跳过
+			const lineEnd = i + 1 < rows.length ? offsets[i + 1] - 1 : text.length;
+			if (!(lineEnd > start)) { continue }
+			const a = this.locateTextPos(nodes, start);
+			const b = this.locateTextPos(nodes, lineEnd);
+			if (!a || !b) { continue }
+			try {
+				range.setStart(a.node, a.offset);
+				range.setEnd(b.node, b.offset);
+				const frag = range.extractContents();
+				const span = document.createElement('span');
+				span.className = 'embed-ghost-line';
+				span.appendChild(frag);
+				range.insertNode(span);
+			} catch (e) {
+				// 单行包装失败不影响展开功能（视觉区分尽力而为）
+			}
+		}
+	}
+
+	/** 字符偏移 → 文本节点位置（与 measureCodeLines 内的 locate 同口径，供幽灵行包装使用）。 */
+	private locateTextPos(nodes: Text[], pos: number): { node: Text; offset: number } | null {
+		let acc = 0;
+		for (let k = 0; k < nodes.length; k++) {
+			const node = nodes[k];
+			if (pos < acc + node.data.length) { return { node, offset: pos - acc } }
+			if (pos === acc + node.data.length) {
+				const next = nodes[k + 1];
+				return next ? { node: next, offset: 0 } : { node, offset: node.data.length };
+			}
+			acc += node.data.length;
+		}
+		return null;
+	}
+
+	/**
+	 * 行号关闭模式的展开入口（C1 等效入口）：把 `...` 行本身作为点击目标。
+	 * 用既有偏移映射管线把点击位置反查到模型行，命中 dots 行才切换其所在段；
+	 * 普通代码行上的点击完全不受影响（零回归）。
+	 */
+	private attachDotsClickTarget(el: HTMLElement) {
+		const codeEl = el.querySelector('pre > code') as HTMLElement | null;
+		if (!codeEl) { return }
+		const anyEl = el as any;
+		if (anyEl.__embedDotsClick) { return }
+		anyEl.__embedDotsClick = true;
+		codeEl.addEventListener('click', (e: MouseEvent) => {
+			const rows = this.readEmbedRows(el);
+			if (!rows || !rows.length || this.expandingBlocks.has(el)) { return }
+			const segs = dotsSegmentsOfRows(rows, this.embedTotalLines(el));
+			if (!segs.length) { return }
+			// 点击位置 → code 文本偏移 → 逻辑行（caretRangeFromPoint 为 Chromium 专有，拿不到就放弃）
+			const docAny = document as any;
+			let container: Node | null = null;
+			let offset = 0;
+			if (typeof docAny.caretRangeFromPoint === 'function') {
+				const r = docAny.caretRangeFromPoint(e.clientX, e.clientY);
+				if (r) { container = r.startContainer; offset = r.startOffset }
+			} else if (typeof docAny.caretPositionFromPoint === 'function') {
+				const p = docAny.caretPositionFromPoint(e.clientX, e.clientY);
+				if (p) { container = p.offsetNode; offset = p.offset }
+			}
+			if (!container) { return }
+			const { nodes, text } = this.collectCodeText(codeEl);
+			if (!nodes.length) { return }
+			const off = this.textOffsetOf(nodes, text, container, offset);
+			if (off === null) { return }
+			const idx = charOffsetToLineIndex(lineStartOffsets(text, rows.length), off);
+			const seg = segs.find((s) => idx >= s.startIndex && idx <= s.endIndex);
+			if (!seg) { return }
+			e.preventDefault();
+			e.stopPropagation();
+			this.toggleDotsSegment(el, dotsSegmentId(seg));
+		});
+	}
+
+	/**
+	 * 行号关闭模式的收起符号（g-011 实机修复）：展开后 `...` 行消失，▾ 需要新载体。
+	 * 「▾首 + ▴末」括号式：首幽灵行挂 ▾、末幽灵行挂 ▴（U+25B4），两端点击动作相同=收起该段。
+	 * 绝对定位浮层——绝不修改 code 的 textContent（任何文本偏移都会破坏 selectionRowRange
+	 * 的选区映射）；符号只覆盖行首空白区。重建幂等：先清旧符号再挂新符号。
+	 */
+	private positionExpandToggles(el: HTMLElement) {
+		const preEl = el.querySelector('pre') as HTMLPreElement | null;
+		const codeElm = preEl ? preEl.querySelector('code') : null;
+		if (!preEl || !codeElm) { return }
+		// 清掉旧符号（重建幂等；行号模式符号在 gutter 内部、不在此清理范围）
+		preEl.querySelectorAll('.embed-expand-floating').forEach((n) => n.remove());
+		const ids = this.expandedSegments.get(el);
+		if (!ids || !ids.size) { return }
+		const rows = this.readEmbedRows(el);
+		if (!rows || !rows.length) { return }
+		const starts = ghostStartNumsOfExpanded(rows, ids);
+		const ends = ghostEndNumsOfExpanded(rows, ids);
+		if (!starts.size && !ends.size) { return }
+		const code = codeElm as HTMLElement;
+		const measured = this.measureCodeLines(code, rows.length);
+		const resolved = resolveLineTops(measured.tops);
+		const contentH = measured.contentHeight;
+		const halfLeading = contentH > 0 && resolved && resolved.pitch > contentH ? (resolved.pitch - contentH) / 2 : 0;
+		const preRect = preEl.getBoundingClientRect();
+		const codeRect = code.getBoundingClientRect();
+		const cs = getComputedStyle(code);
+		const pitchFallback = contentH || 0;
+		preEl.style.position = 'relative';
+		const appendToggle = (num: number, segId: string, ch: string) => {
+			const idx = rows.findIndex((r) => !r.dot && r.num === num);
+			if (idx < 0) { return }
+			const rowTop = resolved ? resolved.tops[idx] : (codeRect.top + idx * pitchFallback);
+			const toggle = document.createElement('span');
+			toggle.className = 'embed-expand-toggle is-expanded embed-expand-floating';
+			toggle.textContent = ch;
+			toggle.title = t('collapseGhostTitle');
+			toggle.setAttribute('aria-label', t('collapseGhostTitle'));
+			toggle.dataset.dotsSegment = segId;
+			toggle.style.fontFamily = cs.fontFamily;
+			toggle.style.fontSize = cs.fontSize;
+			toggle.style.lineHeight = (resolved ? resolved.pitch : contentH) + 'px';
+			toggle.style.top = (rowTop - preRect.top - halfLeading) + 'px';
+			toggle.style.left = (codeRect.left - preRect.left + 2) + 'px';
+			toggle.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation() });
+			toggle.addEventListener('click', (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				this.toggleDotsSegment(el, segId);
+			});
+			preEl.appendChild(toggle);
+		};
+		// 先挂首符号 ▾；末符号 ▴ 跳过「同一段同一行」（单行段 start==end 只挂一个，不叠加）
+		for (const [num, segId] of starts) { appendToggle(num, segId, '▾') }
+		for (const [num, segId] of ends) {
+			if (starts.has(num)) { continue }
+			appendToggle(num, segId, '▴');
+		}
+	}
+
+	/**
+	 * 展开态「恢复选中行」唯一写入口（单击幽灵行 / 拖选确认 / Ctrl+拖选共用）。
+	 * 统一语义（C4）：LINES 已有 → LINES∪选中 且 HIDE−选中（合并为一次全文最小 diff，单步 Ctrl+Z）；
+	 * LINES 缺省 → 绝不创建 LINES 键，只做 HIDE−选中（走既有 HIDE 通道）。
+	 * 写回成功 → 文件变更 → 自动重渲染（新元素）→ 展开态自动收起。
+	 */
+	restoreLinesFromGutter(el: HTMLElement, nums: number[]) {
+		const rows = this.readEmbedRows(el);
+		if (!rows || !rows.length) { new Notice(t('noticeCannotReadRowModel')); return }
+		const ghost = this.ghostNumsOf(el, nums);
+		if (!ghost.length) { new Notice(t('noticeNoRestorableLines')); return }
+		const total = this.embedTotalLines(el);
+		const comp = restoreCompute(
+			this.embedHasLinesKey(el) ? (el.dataset.embedLines ?? '') : undefined,
+			el.dataset.embedHideSpec || '',
+			ghost,
+			total,
+		);
+		if (!comp.changed) { new Notice(t('noticeNothingToRestore')); return }
+		const msg = ghost.length === 1 ? t('noticeRestoredOne', { n: ghost[0] }) : t('noticeRestoredMany', { n: ghost.length });
+		if (comp.lines !== null) {
+			this.applyLinesValue(el, comp.lines, false, msg, comp.hide);
+		} else {
+			this.applyHideValue(el, comp.hide, msg);
+		}
 	}
 
 	/* ---------- 选区 → 块 / 行模型 ---------- */
@@ -484,6 +879,9 @@ export default class EmbedCodeFile extends Plugin {
 		const info = this.resolveSelectionHide();
 		if (!info) { return }
 		this.showHideFloatButton(info.el, info.nums.length);
+		// g-011 增量 C：代码选区落在展开态幽灵行上 → 追加「恢复选中行」（不给回调=代码选区路径，
+		// 点击时重新解析选区并只恢复其中的幽灵行）
+		if (this.ghostNumsOf(info.el, info.nums).length) { this.attachRestoreFloatButton(info.nums.length) }
 	}
 
 	/**
@@ -491,8 +889,10 @@ export default class EmbedCodeFile extends Plugin {
 	 * - 代码选区路径：不给 anchor，按 window.getSelection() 定位（既有行为不变）；
 	 * - 行号列拖选路径：给 anchor（被拖选行号的包围盒），因为此时浏览器选区在 gutter 上，
 	 *   用 getSelection() 定位会跑偏。
+	 * g-011：块为 LINES 缺省（dataset.embedLines 不存在）时并列追加「仅显示选中行」按钮；
+	 * 块已有 LINES 时绝不出现（不静默改写既有 LINES）。
 	 */
-	private showHideFloatButton(embed: HTMLElement, count: number, anchor?: DOMRect | null, onClick?: () => void) {
+	private showHideFloatButton(embed: HTMLElement, count: number, anchor?: DOMRect | null, onClick?: () => void, showOnlyOnClick?: () => void, restoreOnClick?: () => void) {
 		this.removeHideFloatButton();
 		const btn = document.createElement('button');
 		btn.className = 'embed-hide-float';
@@ -512,6 +912,59 @@ export default class EmbedCodeFile extends Plugin {
 		this.hideFloatBtn = btn;
 		this.hideFloatTarget = embed;
 		this.positionHideFloatButton(embed, anchor);
+
+		if (!this.embedHasLinesKey(embed)) {
+			this.attachShowOnlyFloatButton(count, showOnlyOnClick);
+		}
+		// g-011 增量 C：展开态选区含幽灵行 → 追加「恢复选中行」（排在主按钮正下方）
+		if (restoreOnClick) {
+			this.attachRestoreFloatButton(count, restoreOnClick);
+		}
+	}
+
+	/** g-011：「仅显示选中行」并列按钮（浮层第二个动作；位置排在主按钮正上方）。 */
+	private attachShowOnlyFloatButton(count: number, showOnlyOnClick?: () => void) {
+		const btn = document.createElement('button');
+		btn.className = 'embed-hide-float embed-show-only-float';
+		btn.setText(count > 1 ? t('floatShowOnlySelectedMany', { n: count }) : t('floatShowOnlySelected'));
+		btn.title = t('floatShowOnlyTitle');
+		btn.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation() }, true);
+		btn.addEventListener('click', (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			this.removeHideFloatButton();
+			if (showOnlyOnClick) { showOnlyOnClick(); return }
+			const info = this.resolveSelectionHide();
+			if (!info) { new Notice(t('noticeNoValidSelection')); return }
+			this.showOnlySelectionFromResolved(info);
+		});
+		document.body.appendChild(btn);
+		this.showOnlyFloatBtn = btn;
+		this.positionShowOnlyFloatButton();
+	}
+
+	/**
+	 * g-011 增量 C：浮层「恢复选中行」按钮（展开态且选区含幽灵行时出现，排在主按钮正下方）。
+	 * 不给 onClick 时走代码选区路径：重新解析选区并只恢复其中的幽灵行。
+	 */
+	private attachRestoreFloatButton(count: number, restoreOnClick?: () => void) {
+		const btn = document.createElement('button');
+		btn.className = 'embed-hide-float embed-restore-float';
+		btn.setText(count > 1 ? t('floatRestoreSelectedMany', { n: count }) : t('floatRestoreSelected'));
+		btn.title = t('floatRestoreTitle');
+		btn.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation() }, true);
+		btn.addEventListener('click', (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			this.removeHideFloatButton();
+			if (restoreOnClick) { restoreOnClick(); return }
+			const info = this.resolveSelectionHide();
+			if (!info) { new Notice(t('noticeNoValidSelection')); return }
+			this.restoreLinesFromGutter(info.el, info.nums);
+		});
+		document.body.appendChild(btn);
+		this.restoreFloatBtn = btn;
+		this.positionRestoreFloatButton();
 	}
 
 	private positionHideFloatButton(embed: HTMLElement, anchor?: DOMRect | null) {
@@ -535,11 +988,46 @@ export default class EmbedCodeFile extends Plugin {
 		const y = rect.top - h - 6;
 		btn.style.left = Math.max(4, Math.min(x, window.innerWidth - w - 4)) + 'px';
 		btn.style.top = Math.max(4, (y < 4 ? rect.bottom + 6 : y)) + 'px';
+		this.positionShowOnlyFloatButton();
+	}
+
+	/** g-011：并列按钮定位——与主按钮左对齐、排在其正上方 4px（上下排布避免窄窗口横向溢出）。 */
+	private positionShowOnlyFloatButton() {
+		const btn = this.showOnlyFloatBtn;
+		const primary = this.hideFloatBtn;
+		if (!btn || !primary) { return }
+		const w = btn.offsetWidth || 130;
+		const h = btn.offsetHeight || 26;
+		const px = parseFloat(primary.style.left);
+		const py = parseFloat(primary.style.top);
+		const x = isFinite(px) ? px : 4;
+		const y = (isFinite(py) ? py : h + 4) - h - 4;
+		btn.style.left = Math.max(4, Math.min(x, window.innerWidth - w - 4)) + 'px';
+		btn.style.top = Math.max(4, y) + 'px';
+	}
+
+	/** g-011 增量 C：「恢复选中行」按钮定位——与主按钮左对齐、排在其正下方 4px。 */
+	private positionRestoreFloatButton() {
+		const btn = this.restoreFloatBtn;
+		const primary = this.hideFloatBtn;
+		if (!btn || !primary) { return }
+		const w = btn.offsetWidth || 130;
+		const ph = primary.offsetHeight || 26;
+		const px = parseFloat(primary.style.left);
+		const py = parseFloat(primary.style.top);
+		const x = isFinite(px) ? px : 4;
+		const y = (isFinite(py) ? py : 4) + ph + 4;
+		btn.style.left = Math.max(4, Math.min(x, window.innerWidth - w - 4)) + 'px';
+		btn.style.top = Math.max(4, y) + 'px';
 	}
 
 	private removeHideFloatButton() {
 		if (this.hideFloatBtn) { this.hideFloatBtn.remove() }
+		if (this.showOnlyFloatBtn) { this.showOnlyFloatBtn.remove() }
+		if (this.restoreFloatBtn) { this.restoreFloatBtn.remove() }
 		this.hideFloatBtn = null;
+		this.showOnlyFloatBtn = null;
+		this.restoreFloatBtn = null;
 		this.hideFloatTarget = null;
 	}
 
@@ -602,22 +1090,49 @@ export default class EmbedCodeFile extends Plugin {
 		const gutter = drag.gutter;
 		const spans = drag.spans;
 
-		// 单击（起点=终点）→ 立即隐藏该行，无二次确认
+		// 单击（起点=终点）→ 幽灵行=立即恢复该行；普通行=立即隐藏（既有语义，零回归）
 		if (lo === hi) {
 			const num = this.gutterSourceLineNumForSpan(el, lo);
 			if (num === null) { new Notice(t('noticeGutterLineUnavailable')); return }
+			if (this.isGhostLine(el, num)) { this.restoreLinesFromGutter(el, [num]); return }
 			this.hideLinesFromGutter(el, [num]);
 			return;
 		}
 
-		// 拖选多行 → 浮出确认按钮（按住 Ctrl/Cmd 则按下即隐藏，便于连续操作）
+		// 拖选多行 → 浮出确认按钮（按住 Ctrl/Cmd 则按下即执行，便于连续操作）
 		const nums = gutterSpanRangeToSourceLineNums(this.readEmbedRows(el) ?? [], lo, hi);
 		if (!nums.length) { new Notice(t('noticeNoHideableLines')); return }
+
+		// g-011 增量 C：展开态——选区含任一幽灵行 → 追加「恢复选中行」动作（只恢复幽灵行；
+		// 普通行本就可见，恢复为 no-op）。纯普通行选区走既有隐藏路径，零回归。
+		const ghost = this.ghostNumsOf(el, nums);
+		if (ghost.length) {
+			const freshNums = () => {
+				const fresh = this.gutterSpanRangeFromLiveGutter(gutter, lo, hi);
+				return fresh.length ? fresh : nums;
+			};
+			if (e.ctrlKey || e.metaKey) { this.restoreLinesFromGutter(el, this.ghostNumsOf(el, freshNums())); return }
+			const anchor = this.gutterSpansRect(spans, lo, hi);
+			this.showHideFloatButton(el, nums.length, anchor, () => {
+				this.hideLinesFromGutter(el, freshNums());
+			}, () => {
+				this.showOnlyLinesFromGutter(el, freshNums());
+			}, () => {
+				const freshGhost = this.ghostNumsOf(el, freshNums());
+				if (freshGhost.length) { this.restoreLinesFromGutter(el, freshGhost) } else { new Notice(t('noticeNoRestorableLines')) }
+			});
+			return;
+		}
+
 		if (e.ctrlKey || e.metaKey) { this.hideLinesFromGutter(el, nums); return }
 		const anchor = this.gutterSpansRect(spans, lo, hi);
 		this.showHideFloatButton(el, nums.length, anchor, () => {
 			const fresh = this.gutterSpanRangeFromLiveGutter(gutter, lo, hi);
 			this.hideLinesFromGutter(el, fresh.length ? fresh : nums);
+		}, () => {
+			// g-011：「仅显示选中行」并列按钮（仅 LINES 缺省的块会创建）
+			const fresh = this.gutterSpanRangeFromLiveGutter(gutter, lo, hi);
+			this.showOnlyLinesFromGutter(el, fresh.length ? fresh : nums);
 		});
 	}
 
@@ -860,17 +1375,46 @@ export default class EmbedCodeFile extends Plugin {
 	/* ---------- 写回（g-009 修复：以「当前真实全文」为唯一事实来源） ---------- */
 
 	/**
-	 * 写回入口。事实来源优先级：① 该文件正在 MarkdownView 编辑器中打开 → `editor.getValue()`
+	 * 写回入口（HIDE 通道）。事实来源优先级：① 该文件正在 MarkdownView 编辑器中打开 → `editor.getValue()`
 	 * （这就是用户此刻看到的全文，也是唯一可信的当前状态）；② 否则 `vault.read`（process 路径在
 	 * 其回调里拿同一份全文）。
 	 * 渲染期的 `info.text` **只用于日志与提示**，不再作为中止依据（旧实现把它当节区文本却又按整文件
 	 * 切片使用，导致「代码块不覆盖整个文件」时恒真中止）。
 	 */
 	applyHideValue(el: HTMLElement, hideSpec: string, successMsg: string) {
-		const log = this.buildWriteLog(el, hideSpec);
+		this.applySectionWrite(el, { kind: 'hide', spec: hideSpec, successMsg });
+	}
+
+	/**
+	 * g-011：LINES 写回入口（功能 A「仅显示选中行」/ 功能 B「HIDE 转 LINES」共用）。
+	 * 复用 HIDE 的整条安全管线：编辑器优先最小 diff replaceRange（保 Ctrl+Z）、vault 兜底、
+	 * 全部分支 Notice + 结构化日志（LINES 通道用 [embed-code-file][g-011] 前缀）。
+	 * clearHide=true 时同时删除该块的 HIDE 键行——两条新功能的最终语义都由 LINES 全权决定可见集合，
+	 * 留着 HIDE 渲染期会再减一轮，语义就不对了。
+	 * 增量 C（恢复语义）：hideSpec 显式给出时按该值写/删 HIDE（''=移除键行），与 LINES 改动
+	 * 合并为**一次**全文最小 diff——单步 Ctrl+Z，而不是两次写回两步撤销。
+	 */
+	applyLinesValue(el: HTMLElement, linesSpec: string, clearHide: boolean, successMsg: string, hideSpec?: string) {
+		this.applySectionWrite(el, { kind: 'lines', spec: linesSpec, clearHide, successMsg, hideSpec });
+	}
+
+	/**
+	 * HIDE/LINES 两通道共用的写回管线（g-011 泛化自原 applyHideValue；HIDE 分支逐行保持原行为）。
+	 * 事实来源优先级：编辑器 getValue() → vault.read/process；定位失败是唯一合法中止。
+	 */
+	private applySectionWrite(el: HTMLElement, req: { kind: 'hide'; spec: string; clearHide?: false; successMsg: string; hideSpec?: string } | { kind: 'lines'; spec: string; clearHide: boolean; successMsg: string; hideSpec?: string }) {
+		const isLines = req.kind === 'lines';
+		const clearHide = req.clearHide === true;
+		const hideSpec = req.hideSpec !== undefined && req.hideSpec !== null ? req.hideSpec : undefined;
+		const successMsg = req.successMsg;
+		// HIDE 通道保持 g-009 的日志前缀（零回归）；LINES 通道按 g-011 纪律用新前缀
+		const logTag = isLines ? '[embed-code-file][g-011] LINES 写入' : '[embed-code-file][g-009] HIDE 写入';
+		const abortTag = isLines ? '[embed-code-file][g-011] 写回中止' : '[embed-code-file][g-009] 写回中止';
+		const log = isLines ? this.buildLinesWriteLog(el, req.spec, clearHide, hideSpec) : this.buildWriteLog(el, req.spec);
+
 		const ctx = this.embedSections.get(el);
 		if (!ctx) {
-			console.warn('[embed-code-file][g-009] 写回中止', { ...log, branch: 'abort-no-context', abort: '找不到该块的渲染上下文' });
+			console.warn(abortTag, { ...log, branch: 'abort-no-context', abort: '找不到该块的渲染上下文' });
 			new Notice(t('noticeCannotLocateSource'));
 			return;
 		}
@@ -880,7 +1424,7 @@ export default class EmbedCodeFile extends Plugin {
 		log.infoRaw = info;
 		if (!info) {
 			// getSectionInfo 返回 null：不再当作中止依据（dev 版本常见），改用日志中记录的提示继续定位
-			console.warn('[embed-code-file][g-009] 写回中止', { ...log, branch: 'abort-no-section-info', abort: 'getSectionInfo 返回 null，无行号提示可定位' });
+			console.warn(abortTag, { ...log, branch: 'abort-no-section-info', abort: 'getSectionInfo 返回 null，无行号提示可定位' });
 			new Notice(t('noticeCannotLocateSourceNoInfo'));
 			return;
 		}
@@ -895,26 +1439,30 @@ export default class EmbedCodeFile extends Plugin {
 		if (editor) {
 			let fullText = '';
 			try { fullText = editor.getValue() } catch (e) {
-				console.warn('[embed-code-file][g-009] 写回中止', { ...log, branch: 'abort-editor-getValue-threw', sourcePath, path: pathKind, abort: String(e) });
+				console.warn(abortTag, { ...log, branch: 'abort-editor-getValue-threw', sourcePath, path: pathKind, abort: String(e) });
 				new Notice(t('noticeWriteFailedEditorRead'));
 				return;
 			}
-			const plan = applyHideToFullText(fullText, hideSpec, hint, log.meta);
+			// 两通道恰有一个产出计划；isLines 在本次调用内定型，显式分支才能拿到具体类型做 describe
+			const planLines = isLines ? updateLinesInSection(fullText, req.spec, clearHide, hint, log.meta, hideSpec) : null;
+			const planHide = isLines ? null : applyHideToFullText(fullText, req.spec, hint, log.meta);
+			const plan = planLines ?? planHide;
+			if (!plan) { return } // 不可达（两通道恰一产出计划）；仅为类型收窄
 			log.path = pathKind;
 			log.sourcePath = sourcePath;
 			log.editorLineCount = editor.lastLine() + 1;
 			log.fullText = describeText(fullText);
 			describeInfoTextFlavor(log, info, fullText);
 			log.fence = describeFence(plan, info.lineStart);
-			log.update = describeUpdate(plan);
+			if (planLines) { log.update = describeLinesUpdate(planLines) } else if (planHide) { log.update = describeUpdate(planHide) }
 			if (!plan.ok) {
-				console.warn('[embed-code-file][g-009] 写回中止', { ...log, branch: 'abort-locate-failed', abort: plan.reason });
+				console.warn(abortTag, { ...log, branch: 'abort-locate-failed', abort: plan.reason });
 				new Notice(t('noticeWriteAbandoned', { reason: tReason(plan.reason) }));
 				return;
 			}
 			if (!plan.changed) {
 				// 幂等：内容已一致，不做任何写入（也不报「没有需要写入的改动」以外的错）
-				console.log('[embed-code-file][g-009] HIDE 写入', { ...log, branch: 'noop-unchanged', result: 'unchanged' });
+				console.log(logTag, { ...log, branch: 'noop-unchanged', result: 'unchanged' });
 				new Notice(t('noticeNoChanges'));
 				return;
 			}
@@ -922,7 +1470,7 @@ export default class EmbedCodeFile extends Plugin {
 			const from = this.offsetToEditorPos(fullText, diff.prefix);
 			const to = this.offsetToEditorPos(fullText, diff.oldSuffix);
 			editor.replaceRange(plan.newText.slice(diff.prefix, diff.newSuffix), from, to);
-			console.log('[embed-code-file][g-009] HIDE 写入', {
+			console.log(logTag, {
 				...log, branch: 'editor-replaceRange-minimal-diff', result: 'ok',
 				diff: { prefix: diff.prefix, oldSuffix: diff.oldSuffix, replacedChars: diff.oldSuffix - diff.prefix },
 				from, to,
@@ -932,30 +1480,44 @@ export default class EmbedCodeFile extends Plugin {
 		}
 
 		if (!file) {
-			console.warn('[embed-code-file][g-009] 写回中止', { ...log, branch: 'abort-no-file', sourcePath, path: pathKind, abort: '找不到源文件（ctx.sourcePath 未命中 vault）' });
+			console.warn(abortTag, { ...log, branch: 'abort-no-file', sourcePath, path: pathKind, abort: '找不到源文件（ctx.sourcePath 未命中 vault）' });
 			new Notice(t('noticeWriteAbandoned', { reason: t('reasonSourceFileNotFound') }));
 			return;
 		}
 
-		this.writeHideToVault(log, file, hideSpec, hint, successMsg)
+		this.writeSectionToVault(log, file, req, hint, { logTag, abortTag })
 			.catch((e) => {
-				console.error('[embed-code-file][g-009] 写回失败', { ...log, branch: 'abort-vault-write-threw', sourcePath, path: 'vault', error: String(e) });
+				console.error(abortTag, { ...log, branch: 'abort-vault-write-threw', sourcePath, path: 'vault', error: String(e) });
 				new Notice(t('noticeWriteFailed'));
 			});
 	}
 
-	/** 非编辑器路径：vault.process（缺 API 时 read + modify），同样只按全文口径改 HIDE 一行。 */
-	private async writeHideToVault(log: any, file: TFile, hideSpec: string, hint: { start: number; end: number }, successMsg: string): Promise<void> {
+	/** 非编辑器路径：vault.process（缺 API 时 read + modify）；g-011 起 HIDE/LINES 两通道共用，同样只按全文口径改键行。 */
+	private async writeSectionToVault(
+		log: any,
+		file: TFile,
+		req: { kind: 'hide' | 'lines'; spec: string; clearHide?: boolean; successMsg: string; hideSpec?: string },
+		hint: { start: number; end: number },
+		tags: { logTag: string; abortTag: string },
+	): Promise<void> {
 		const vaultAny = this.app.vault as any;
+		const isLines = req.kind === 'lines';
 		// 用可变状态对象承接回调里的结果（TS 无法追踪回调赋值，避免窄化成 never）
-		const state: { text: string; plan: ReturnType<typeof applyHideToFullText> | null } = { text: '', plan: null };
+		const state: { text: string; plan: HideUpdatePlan | LinesUpdatePlan | null } = { text: '', plan: null };
+		let planLines: LinesUpdatePlan | null = null;
+		let planHide: HideUpdatePlan | null = null;
 
 		const applyToFullText = (content: string): string => {
 			state.text = content;
-			const plan = applyHideToFullText(content, hideSpec, hint, log.meta);
-			state.plan = plan;
-			if (!plan.ok) { return content }
-			return plan.newText;
+			if (isLines) {
+				planLines = updateLinesInSection(content, req.spec, req.clearHide === true, hint, log.meta, req.hideSpec);
+				state.plan = planLines;
+			} else {
+				planHide = applyHideToFullText(content, req.spec, hint, log.meta);
+				state.plan = planHide;
+			}
+			if (!state.plan || !state.plan.ok) { return content }
+			return state.plan.newText;
 		};
 
 		const useProcess = typeof vaultAny.process === 'function';
@@ -967,32 +1529,31 @@ export default class EmbedCodeFile extends Plugin {
 			if (state.plan && state.plan.changed) { await this.app.vault.modify(file, next) }
 		}
 
-		const plan = state.plan;
 		log.path = 'vault';
 		log.sourcePath = file.path;
 		log.fullText = describeText(state.text);
 		describeInfoTextFlavor(log, log.infoRaw ?? null, state.text);
-		if (plan) {
-			log.fence = describeFence(plan, hint.start);
-			log.update = describeUpdate(plan);
+		if (state.plan) {
+			log.fence = describeFence(state.plan, hint.start);
 		}
-		if (!plan || !plan.ok) {
-			const abort = plan ? plan.reason : t('reasonCannotReadFile');
-			console.warn('[embed-code-file][g-009] 写回中止', { ...log, branch: 'abort-locate-failed', abort });
+		if (planLines) { log.update = describeLinesUpdate(planLines) } else if (planHide) { log.update = describeUpdate(planHide) }
+		if (!state.plan || !state.plan.ok) {
+			const abort = state.plan ? state.plan.reason : t('reasonCannotReadFile');
+			console.warn(tags.abortTag, { ...log, branch: 'abort-locate-failed', abort });
 			new Notice(t('noticeWriteAbandoned', { reason: tReason(abort) }));
 			return;
 		}
-		if (!plan.changed) {
-			console.log('[embed-code-file][g-009] HIDE 写入', { ...log, branch: 'noop-unchanged', result: 'unchanged' });
+		if (!state.plan.changed) {
+			console.log(tags.logTag, { ...log, branch: 'noop-unchanged', result: 'unchanged' });
 			new Notice(t('noticeNoChanges'));
 			return;
 		}
-		console.log('[embed-code-file][g-009] HIDE 写入', {
+		console.log(tags.logTag, {
 			...log,
 			branch: useProcess ? 'vault-process' : 'vault-read-modify',
 			result: 'ok',
 		});
-		new Notice(successMsg);
+		new Notice(req.successMsg);
 	}
 
 	/* ---------- g-009 调试日志（负责人明确要求把该问题的全部判断打进 console） ---------- */
@@ -1018,6 +1579,33 @@ export default class EmbedCodeFile extends Plugin {
 			sectionInfo: null,
 			infoTextIsWholeFile: false,
 			infoTextIsSectionSlice: false,
+			editorLineCount: -1,
+			fullText: null,
+			fence: null,
+			update: null,
+		};
+	}
+
+	/** g-011：LINES 写回的日志骨架（与 buildWriteLog 同构，键值字段换成 LINES 语义）。 */
+	private buildLinesWriteLog(el: HTMLElement, linesSpec: string, clearHide: boolean, hideSpec?: string): any {
+		const rows = this.readEmbedRows(el);
+		const linesNow = el.dataset.embedLines ?? '';
+		const currentHide = el.dataset.embedHideSpec || '';
+		return {
+			linesSpec: String(linesSpec),
+			linesNow,
+			clearHide,
+			hideSpec: hideSpec === undefined ? '(unchanged)' : String(hideSpec),
+			hiddenNow: currentHide,
+			rowCount: rows ? rows.length : -1,
+			meta: {
+				path: el.dataset.embedPath ?? '',
+				lines: linesNow,
+				hideSpec: currentHide,
+				contentTail: el.dataset.embedTail ?? '',
+			},
+			infoRaw: null,
+			sectionInfo: null,
 			editorLineCount: -1,
 			fullText: null,
 			fence: null,
@@ -1073,15 +1661,34 @@ export default class EmbedCodeFile extends Plugin {
 			return;
 		}
 
-		this.insertLineGutterElement(pre, code, plan);
+		// g-011 增量 C：dots 模型行 ↔ 展开段 id 映射（与 cells 对齐；leading-blank 时整体后移一格），
+		// 供行号格渲染展开/收起符号
+		const segs = dotsSegmentsOfRows(rows, this.embedTotalLines(el));
+		const lead = plan.reason === 'leading-blank' ? 1 : 0;
+		const dotsFlags = plan.cells.map((cell, i) => {
+			const rowIdx = i - lead;
+			if (cell !== '' || rowIdx < 0 || rowIdx >= rows.length) { return '' }
+			const seg = segs.find((s) => rowIdx >= s.startIndex && rowIdx <= s.endIndex);
+			return seg ? dotsSegmentId(seg) : '';
+		});
+
+		this.insertLineGutterElement(pre, code, plan, dotsFlags);
 	}
 
 	/** 生成/刷新行号列节点（同 insertTitlePreElement 的防御式先移除模式）。 */
-	insertLineGutterElement(pre: HTMLPreElement, code: HTMLElement, plan: LineGutterPlan) {
+	insertLineGutterElement(pre: HTMLPreElement, code: HTMLElement, plan: LineGutterPlan, dotsFlags?: string[]) {
 		pre.querySelectorAll('.embed-line-gutter').forEach((x) => x.remove());
 
 		// F-4：绘制计划挂到 pre 上（与 gutter 生命周期解耦，重渲染后可重建）
 		pre.dataset.lineGutterCells = plan.cells.join('\n');
+		// g-011：cells→模型行的对齐偏移（leading-blank 时首个 cell 是空行）——展开符号反查模型行用
+		pre.dataset.lineGutterLead = plan.reason === 'leading-blank' ? '1' : '0';
+		// g-011 增量 C：dots 行的展开段 id（与 cells 逐位对齐；无 dots 时清掉，避免陈旧状态）
+		if (dotsFlags && dotsFlags.some((f) => f !== '')) {
+			pre.dataset.lineGutterDots = JSON.stringify(dotsFlags);
+		} else {
+			delete pre.dataset.lineGutterDots;
+		}
 
 		this.setupGutterObserver(pre);
 		this.refreshLineGutter(pre);
@@ -1111,6 +1718,21 @@ export default class EmbedCodeFile extends Plugin {
 		const cellsText = pre.dataset.lineGutterCells;
 		if (cellsText === undefined) { return }   // 该块未启用行号
 		const cells = cellsText.split('\n');
+		// g-011 增量 C：dots 行 ↔ 展开段 id（与 cells 逐位对齐）；展开态由块根元素的状态决定符号方向
+		let dotsFlags: string[] = [];
+		try { dotsFlags = pre.dataset.lineGutterDots ? JSON.parse(pre.dataset.lineGutterDots) as string[] : [] } catch (e) { dotsFlags = [] }
+		const gutterEmbed = this.resolveEmbedFromNode(pre);
+		const expandedIds = gutterEmbed ? this.expandedSegments.get(gutterEmbed) : null;
+		// g-011 修复：展开段的收起符号定位（首幽灵行 = 段 start）；cells→模型行偏移经 dataset 对齐
+		const leadHere = pre.dataset.lineGutterLead === '1' ? 1 : 0;
+		const rowsForSymbols = gutterEmbed ? this.readEmbedRows(gutterEmbed) : null;
+		const expandedStarts = (expandedIds && expandedIds.size && rowsForSymbols)
+			? ghostStartNumsOfExpanded(rowsForSymbols, expandedIds)
+			: null;
+		// g-011 二次反馈：「▾首 + ▴末」括号式——末幽灵行（= 段 end）同样叠加符号
+		const expandedEnds = (expandedIds && expandedIds.size && rowsForSymbols)
+			? ghostEndNumsOfExpanded(rowsForSymbols, expandedIds)
+			: null;
 
 		this.applyLineGutterNoWrap(pre, code);
 
@@ -1170,7 +1792,71 @@ export default class EmbedCodeFile extends Plugin {
 		const spans: HTMLElement[] = [];
 		const targets: number[] = [];
 		for (let i = 0; i < cells.length; i++) {
-			if (cells[i] === '') { continue }   // 省略行：不编号、不占号、不绘制
+			if (cells[i] === '') {
+				// g-011 增量 C：省略行的行号格 → 展开符号（纯视图态）。符号不是 .embed-line-number，
+				// 天然不进入行号拖选索引空间；mousedown 阻止默认避免触发行号拖选/文本选择。
+				const segId = dotsFlags[i];
+				if (segId && gutterEmbed) {
+					const isExpanded = !!expandedIds && expandedIds.has(segId);
+					const toggle = document.createElement('span');
+					toggle.className = 'embed-expand-toggle';
+					toggle.textContent = isExpanded ? '▾' : '▸';
+					toggle.title = isExpanded ? t('collapseDotsTitle') : t('expandDotsTitle');
+					toggle.dataset.dotsSegment = segId;
+					// 与行号 span 同一坐标系（F-5/F-6：逐行实测 top 绝对定位 + 半行距修正）
+					const targetTop = resolved ? resolved.tops[i] : (codeRect.top + i * pitch);
+					toggle.style.fontFamily = cs.fontFamily;
+					toggle.style.fontSize = cs.fontSize;
+					toggle.style.lineHeight = pitch + 'px';
+					toggle.style.top = (targetTop - codeRect.top - halfLeading) + 'px';
+					toggle.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation() });
+					toggle.addEventListener('click', (e) => {
+						e.preventDefault();
+						e.stopPropagation();
+						const embed = this.resolveEmbedFromNode(gutter);
+						if (!embed) { return }
+						this.toggleDotsSegment(embed, segId);
+					});
+					gutter.appendChild(toggle);
+					continue;
+				}
+				continue;   // 省略行：不编号、不占号、不绘制
+			}
+			// g-011 修复：展开段首/末幽灵行 → 行号格左侧叠加 ▾/▴（点击都收起该段）。行号 span 照常创建：
+			// spans 索引空间是拖选映射的权威（gutterSpanSourceLineNums 按「非 dot 模型行」顺序对齐），
+			// 用叠加而不是替换行号，拖选/恢复选区的映射完全不受影响。
+			const rowIdxSym = i - leadHere;
+			let ghostSeg: { id: string; ch: string } | null = null;
+			if (expandedStarts && expandedEnds && rowIdxSym >= 0 && rowsForSymbols && rowIdxSym < rowsForSymbols.length && !rowsForSymbols[rowIdxSym].dot) {
+				const rowNum = rowsForSymbols[rowIdxSym].num;
+				// 单行展开段 start==end：同一行只挂一个符号（首符号优先），不叠加
+				const sid = expandedStarts.get(rowNum);
+				const eid = expandedEnds.get(rowNum);
+				if (sid) { ghostSeg = { id: sid, ch: '▾' } } else if (eid) { ghostSeg = { id: eid, ch: '▴' } }
+			}
+			if (ghostSeg) {
+				const collapseSeg = ghostSeg;   // 闭包捕获 const（TS 不窄化闭包内的 let）
+				const collapse = document.createElement('span');
+				collapse.className = 'embed-expand-toggle is-expanded';
+				collapse.textContent = collapseSeg.ch;
+				collapse.title = t('collapseGhostTitle');
+				collapse.setAttribute('aria-label', t('collapseGhostTitle'));
+				collapse.dataset.dotsSegment = collapseSeg.id;
+				const ghostTop = resolved ? resolved.tops[i] : (codeRect.top + i * pitch);
+				collapse.style.fontFamily = cs.fontFamily;
+				collapse.style.fontSize = cs.fontSize;
+				collapse.style.lineHeight = pitch + 'px';
+				collapse.style.top = (ghostTop - codeRect.top - halfLeading) + 'px';
+				collapse.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation() });
+				collapse.addEventListener('click', (e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					const embedG = this.resolveEmbedFromNode(gutter);
+					if (!embedG) { return }
+					this.toggleDotsSegment(embedG, collapseSeg.id);
+				});
+				gutter.appendChild(collapse);
+			}
 			const targetTop = resolved ? resolved.tops[i] : (codeRect.top + i * pitch);
 			const span = document.createElement('span');
 			span.className = 'embed-line-number';

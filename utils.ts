@@ -561,6 +561,10 @@ export function computeHideAllButtonRight(
 
 /** section 内既有键行；hideLineIndex=null 表示该 section 没有 HIDE 键。 */
 export interface EmbedSectionKeys {
+	/** g-011：LINES 键行（null = 该 section 没有 LINES 键）；value/quote 与 HIDE 同口径 */
+	linesLineIndex: number | null;
+	linesValue: string | null;
+	linesQuote: string;
 	hideLineIndex: number | null;
 	hideValue: string | null;
 	hideQuote: string;
@@ -599,6 +603,8 @@ export function parseEmbedSectionKeys(sectionText: string): EmbedSectionKeys {
 	if (fenceIndex === -1) { warnings.push('section 内找不到代码块开栏行') }
 
 	let linesIndex: number | null = null;
+	let linesValue: string | null = null;
+	let linesQuote = '';
 	let pathIndex: number | null = null;
 	let hideIndex: number | null = null;
 	let hideValue: string | null = null;
@@ -611,7 +617,7 @@ export function parseEmbedSectionKeys(sectionText: string): EmbedSectionKeys {
 		const line = matchKeyLine(text, 'LINES');
 		const hide = matchKeyLine(text, 'HIDE');
 		const pathKey = matchKeyLine(text, 'PATH');
-		if (line) { if (linesIndex === null) { linesIndex = i } continue }
+		if (line) { if (linesIndex === null) { linesIndex = i; linesValue = line.value; linesQuote = line.quote } continue }
 		if (hide) { if (hideIndex === null) { hideIndex = i; hideValue = hide.value; hideQuote = hide.quote } continue }
 		if (pathKey) { pathIndex = i; continue }
 		break                                          // 出现非键值行 → 元数据区结束
@@ -622,7 +628,7 @@ export function parseEmbedSectionKeys(sectionText: string): EmbedSectionKeys {
 	const anchor = linesIndex !== null ? linesIndex : (pathIndex !== null ? pathIndex : fenceIndex);
 	const insertAt = Math.min(Math.max(anchor, 0) + 1, lines.length);
 
-	return { hideLineIndex: hideIndex, hideValue, hideQuote, insertAt, warnings };
+	return { linesLineIndex: linesIndex, linesValue, linesQuote, hideLineIndex: hideIndex, hideValue, hideQuote, insertAt, warnings };
 }
 
 /**
@@ -841,19 +847,22 @@ export function contentTailOf(text: string): string {
 	return lines.slice(-3).map((l) => l.trim()).join('\n');
 }
 
+/** 写回定位结果（g-011：HIDE / LINES 两条写回通道共用）。 */
+interface EmbedBlockLocation {
+	mode: 'fence' | 'range';
+	matchedBy: string;
+	startLine: number;
+	endLine: number;
+	candidates: EmbedFenceCandidate[];
+}
+
 /**
- * 在全文里按**围栏扫描**定位 HIDE 所属的 embed 块，并算出「只改 HIDE 那一行」之后的新全文。
- * - 定位优先用 lineStartHint（渲染时记录的节区起始行，通常就是开栏行），再用提示元数据
- *   （PATH / LINES / dataset HIDE / 正文尾部）在多个候选里消歧；只有定位失败才 ok=false。
- * - 只改/增/删 HIDE 那一行，其余行（含 CRLF）**字节级保留**：按 '\n' 切分再 join，行内 \r 不动。
- * - text 入参必须是**全文**；信息口径（整文件 or 节区切片）由调用方自行测试与日志判定。
+ * 写回定位（g-011 从 applyHideToFullText 提取共用）：**围栏扫描**优先，lineStart 提示 +
+ * PATH/LINES/HIDE/正文尾部元数据消歧；扫不到围栏才退回节区范围（range-hint）。
+ * 返回 null 表示「围栏无候选且节区提示无效」——唯一合法的定位失败。
  */
-export function applyHideToFullText(fullText: string, hideSpec: string, hint: { start: number; end?: number } | null, meta?: EmbedMetadataHint): HideUpdatePlan {
+function locateEmbedBlockForWrite(fullText: string, hint: { start: number; end?: number } | null, meta?: EmbedMetadataHint): EmbedBlockLocation | null {
 	const lines = fullText.split('\n');
-	// 行尾风格：按 \n 切分后每行可能带 \r。按原风格 join，拼接出的新行才不会把整篇换成混合行尾
-	// （实测症状：CRLF 文件插入 HIDE 后该行变成 '\n'，往返再也回不到原字节）。
-	const eol = detectEol(fullText);
-	const spec = (hideSpec ?? '').trim();
 	const blocks = findEmbedFenceBlocks(fullText);
 	const hintStart = hint && isFinite(hint.start) ? Math.floor(hint.start) : -1;
 	const hintEnd = hint && hint.end !== undefined && isFinite(hint.end) ? Math.floor(hint.end) : -1;
@@ -879,28 +888,45 @@ export function applyHideToFullText(fullText: string, hideSpec: string, hint: { 
 		return { start: b.start, end: b.end, path: metadata.path, lines: metadata.lines, hide: metadata.hide, score };
 	});
 
-	let mode: 'fence' | 'range' = 'fence';
-	let matchedBy = '';
-	let startLine = -1;
-	let endLine = -1;
-
 	const usable = scored.filter((c) => c.score > 0);
 	if (scored.length) {
 		let pick: EmbedFenceCandidate;
+		let matchedBy: string;
 		if (scored.length === 1) { pick = scored[0]; matchedBy = usable.length ? 'fence-only-candidate(hint-matched)' : 'fence-only-candidate' }
 		else if (usable.length) { pick = usable.slice().sort((a, b) => b.score - a.score)[0]; matchedBy = 'fence-scored' }
 		else { pick = scored.slice().sort((a, b) => Math.abs(a.start - hintStart) - Math.abs(b.start - hintStart))[0]; matchedBy = 'fence-nearest' }
-		startLine = pick.start;
-		endLine = pick.end;
-	} else if (hintStart >= 0 && hintStart <= lines.length - 1) {
-		// 扫不到围栏才退回节区范围（[lineStart,lineEnd] 提示），并标注 matchedBy=range-hint
-		mode = 'range';
-		matchedBy = hintEnd >= 0 ? 'range-hint' : 'range-hint-single-line';
-		startLine = Math.max(0, Math.min(hintStart, lines.length - 1));
-		endLine = hintEnd >= 0 ? Math.max(startLine, Math.min(hintEnd, lines.length - 1)) : startLine;
-	} else {
-		return buildFailedPlan(fullText, spec, scored);
+		return { mode: 'fence', matchedBy, startLine: pick.start, endLine: pick.end, candidates: scored };
 	}
+	if (hintStart >= 0 && hintStart <= lines.length - 1) {
+		// 扫不到围栏才退回节区范围（[lineStart,lineEnd] 提示），并标注 matchedBy=range-hint
+		const startLine = Math.max(0, Math.min(hintStart, lines.length - 1));
+		const endLine = hintEnd >= 0 ? Math.max(startLine, Math.min(hintEnd, lines.length - 1)) : startLine;
+		return { mode: 'range', matchedBy: hintEnd >= 0 ? 'range-hint' : 'range-hint-single-line', startLine, endLine, candidates: scored };
+	}
+	return null;
+}
+
+/**
+ * 在全文里按**围栏扫描**定位 HIDE 所属的 embed 块，并算出「只改 HIDE 那一行」之后的新全文。
+ * - 定位优先用 lineStartHint（渲染时记录的节区起始行，通常就是开栏行），再用提示元数据
+ *   （PATH / LINES / dataset HIDE / 正文尾部）在多个候选里消歧；只有定位失败才 ok=false。
+ * - 只改/增/删 HIDE 那一行，其余行（含 CRLF）**字节级保留**：按 '\n' 切分再 join，行内 \r 不动。
+ * - text 入参必须是**全文**；信息口径（整文件 or 节区切片）由调用方自行测试与日志判定。
+ */
+export function applyHideToFullText(fullText: string, hideSpec: string, hint: { start: number; end?: number } | null, meta?: EmbedMetadataHint): HideUpdatePlan {
+	const lines = fullText.split('\n');
+	// 行尾风格：按 \n 切分后每行可能带 \r。按原风格 join，拼接出的新行才不会把整篇换成混合行尾
+	// （实测症状：CRLF 文件插入 HIDE 后该行变成 '\n'，往返再也回不到原字节）。
+	const eol = detectEol(fullText);
+	const spec = (hideSpec ?? '').trim();
+	// 定位逻辑（围栏扫描 + 提示消歧）自 g-011 起与 LINES 写回共用，见 locateEmbedBlockForWrite
+	const loc = locateEmbedBlockForWrite(fullText, hint, meta);
+	if (!loc) { return buildFailedPlan(fullText, spec, []) }
+	const mode = loc.mode;
+	const matchedBy = loc.matchedBy;
+	const startLine = loc.startLine;
+	const endLine = loc.endLine;
+	const scored = loc.candidates;
 
 	let end = endLine;
 	if (end < startLine) { end = startLine }
@@ -959,6 +985,378 @@ function buildFailedPlan(fullText: string, spec: string, candidates: EmbedFenceC
 		ok: false, reason: '无法在全文里定位 embed 块（围栏扫描无候选且节区提示无效）',
 		matchedBy: 'none', mode: 'fence', startLine: -1, endLine: -1, textLines: [], keyLineIndex: -1,
 		oldHide: '', newHide: spec, newHideLine: '', changed: false, newText: fullText, candidates, insertAt: -1, text: '',
+	};
+}
+
+/* ======================= g-011：LINES 写回（仅显示选中行 / HIDE 转 LINES） ======================= */
+
+/** updateLinesInSection 的结果（与 HideUpdatePlan 同构，键值字段换成 LINES 语义）。 */
+export interface LinesUpdatePlan {
+	ok: boolean;
+	reason: string;
+	matchedBy: string;
+	mode: 'fence' | 'range';
+	/** 该块在 fullText.split('\n') 中的围栏行号（-1 表示定位失败退回的占位） */
+	startLine: number;
+	endLine: number;
+	/** 定位到的块切片（含键区与正文；失败 → 空数组），与 HideUpdatePlan.textLines 同口径 */
+	textLines: string[];
+	/** 写入/替换的 LINES 键行在 textLines 中的最终索引（失败/unchanged → 既有位置或 -1） */
+	keyLineIndex: number;
+	oldLines: string;
+	newLines: string;
+	newLinesLine: string;
+	/** clearHide=true 且块内确有 HIDE 时，被删除的原 HIDE 键行原文（其余情形为空串） */
+	removedHideLine: string;
+	/** g-011 增量 C（恢复语义）：本次对 HIDE 键行的动作（hideSpec 给出时可为 replaced/inserted） */
+	hideAction: 'none' | 'removed' | 'replaced' | 'inserted';
+	/** hideAction=replaced/inserted 时写入的新 HIDE 键行文本 */
+	newHideLine: string;
+	changed: boolean;
+	newText: string;
+	candidates: EmbedFenceCandidate[];
+	/** fence（收栏行前）或 range（节区末尾）内的插入点，0-based 相对 textLines */
+	insertAt: number;
+	text: string;
+}
+
+/** g-011：LINES 行改动摘要（与 describeUpdate 对齐，供写回的结构化日志）。 */
+export function describeLinesUpdate(plan: { ok: boolean; changed: boolean; reason: string; keyLineIndex: number; oldLines: string; newLines: string; newLinesLine: string; insertAt: number; removedHideLine: string; hideAction: string; newHideLine: string }): any {
+	return {
+		ok: plan.ok,
+		changed: plan.changed,
+		reason: plan.reason,
+		keyLineIndex: plan.keyLineIndex,
+		oldLines: plan.oldLines,
+		newLines: plan.newLines,
+		newLinesLine: plan.newLinesLine,
+		insertAt: plan.insertAt,
+		removedHideLine: plan.removedHideLine,
+		hideAction: plan.hideAction,
+		newHideLine: plan.newHideLine,
+	};
+}
+
+function buildFailedLinesPlan(fullText: string, spec: string, reason: string): LinesUpdatePlan {
+	return {
+		ok: false, reason,
+		matchedBy: 'none', mode: 'fence', startLine: -1, endLine: -1, textLines: [], keyLineIndex: -1,
+		oldLines: '', newLines: spec, newLinesLine: '', removedHideLine: '', hideAction: 'none', newHideLine: '', changed: false,
+		newText: fullText, candidates: [], insertAt: -1, text: '',
+	};
+}
+
+/**
+ * 在全文里定位 embed 块并把 LINES 写成 linesSpec（纯函数；g-011 功能 A/B 与增量 C 恢复的共同底层）。
+ * 与 applyHideToFullText 同构：共用 locateEmbedBlockForWrite 的围栏扫描 + lineStart 提示 +
+ * PATH/LINES/HIDE 消歧定位；只改/增/删「LINES 一行 +（可选）HIDE 一行」，其余行（含 CRLF）
+ * 字节级保留，newText 交给 computeMinimalDiff 做编辑器内最小替换（保 Ctrl+Z，单步撤销）。
+ * - LINES 键已存在 → 原位替换值（引号风格保留）；不存在 → 插入（PATH 之后，LINES 的语义位置）。
+ * - HIDE 键的处理（增量 C 扩展）：hideSpec 显式给出时按该值写/删（''=移除键行，恢复语义
+ *   HIDE'=HIDE−选中 走这里）；否则 clearHide=true 折叠为「有则删」（A/B：最终语义由 LINES 全权
+ *   决定可见集合，留着 HIDE 渲染期会再减一轮）。两者都未要求 → HIDE 原样保留。
+ *   LINES 与 HIDE 的改动合并为**一次**全文 diff（单步 Ctrl+Z），不做两次写回。
+ * - linesSpec 为空 → ok=false 拒绝写入（空 LINES 语义=缺省=整文件，绝不能把空集合写成空键）。
+ * - reason 约定：inserted / replaced / hide-removed-only（LINES 已同值仅动 HIDE）/ unchanged /
+ *   失败 reason 与 HIDE 通道同口径（定位失败共用同一条中文文案，tReason 已有映射）。
+ */
+export function updateLinesInSection(fullText: string, linesSpec: string, clearHide: boolean, hint: { start: number; end?: number } | null, meta?: EmbedMetadataHint, hideSpec?: string): LinesUpdatePlan {
+	const spec = (linesSpec ?? '').trim();
+	if (!spec) { return buildFailedLinesPlan(fullText, spec, 'LINES 值为空，已拒绝写入') }
+
+	const lines = fullText.split('\n');
+	// 行尾风格与 HIDE 通道同一套（detectEol + 按原风格 join），CRLF 文件写完仍是 CRLF
+	const eol = detectEol(fullText);
+	const loc = locateEmbedBlockForWrite(fullText, hint, meta);
+	if (!loc) { return buildFailedLinesPlan(fullText, spec, '无法在全文里定位 embed 块（围栏扫描无候选且节区提示无效）') }
+
+	const end = Math.max(loc.endLine, loc.startLine);
+	const textLines = lines.slice(loc.startLine, end + 1);
+	const text = textLines.join('\n');
+	const keys = parseEmbedSectionKeys(text);
+	const oldLines = normalizeKeyText(keys.linesValue);
+
+	// ── HIDE 目标：hideSpec 显式给出（恢复语义）优先；否则 clearHide 折叠为「有则删」 ──
+	const hideGiven = hideSpec !== undefined && hideSpec !== null;
+	const hideTarget = hideGiven ? String(hideSpec).trim() : '';
+	const hideRemove = hideGiven ? hideTarget === '' : clearHide;
+	const hideWrite = hideGiven && hideTarget !== '';
+
+	let linesAction: 'none' | 'replaced' | 'inserted' = 'none';
+	let hideAction: 'none' | 'removed' | 'replaced' | 'inserted' = 'none';
+	let keyLineIndex = -1;
+	let newLinesLine = '';
+	let insertAt = -1;
+	let removedHideLine = '';
+	let newHideLine = '';
+
+	if (keys.linesLineIndex !== null) {
+		// LINES 键已存在：原位替换（就地赋值不改行数，索引不受影响）
+		keyLineIndex = keys.linesLineIndex;
+		if (oldLines !== spec) {
+			const quote = keys.linesQuote || '"';
+			newLinesLine = 'LINES: ' + quote + spec + quote;
+			textLines[keyLineIndex] = newLinesLine;
+			linesAction = 'replaced';
+		}
+	} else {
+		// LINES 键不存在：插到 PATH 之后（LINES 的语义位置）；键区解析不到时与 HIDE 同一套兜底
+		insertAt = keys.insertAt;
+		if (keys.insertAt <= 0 && textLines.length > 1) {
+			insertAt = loc.mode === 'range' ? textLines.length : textLines.length - 1;
+		}
+		if (insertAt < 1) { insertAt = textLines.length }
+	}
+
+	if (hideRemove && keys.hideLineIndex !== null) {
+		hideAction = 'removed';
+		removedHideLine = textLines[keys.hideLineIndex] ?? '';
+	} else if (hideWrite) {
+		if (keys.hideLineIndex !== null) {
+			if (normalizeKeyText(keys.hideValue) !== hideTarget) {
+				hideAction = 'replaced';
+				const quote = keys.hideQuote || '"';
+				newHideLine = 'HIDE: ' + quote + hideTarget + quote;
+				textLines[keys.hideLineIndex] = newHideLine;
+			}
+		} else {
+			hideAction = 'inserted';
+			newHideLine = 'HIDE: "' + hideTarget + '"';
+		}
+	}
+
+	// ── 落盘顺序：删除 → 插入（插入点按删除做了前移补偿；先插 LINES，HIDE 的锚点随之确定） ──
+	if (hideAction === 'removed' && keys.hideLineIndex !== null) {
+		const h = keys.hideLineIndex;
+		textLines.splice(h, 1);
+		if (linesAction === 'none' && keys.linesLineIndex !== null && h < keys.linesLineIndex) {
+			keyLineIndex -= 1;   // 被删 HIDE 在 LINES 行之前 → 日志口径的 LINES 行索引前移
+		}
+		if (linesAction !== 'none' && h < insertAt) {
+			insertAt -= 1;       // 被删 HIDE 在 LINES 插入点之前 → 插入点前移一位
+		}
+	}
+	if (linesAction === 'none' && keys.linesLineIndex === null) {
+		// LINES 缺失就必然要插入（oldLines 为空 ≠ spec），仅类型完整性兜底
+		linesAction = 'inserted';
+	}
+	if (linesAction === 'inserted') {
+		newLinesLine = 'LINES: "' + spec + '"';
+		textLines.splice(insertAt, 0, newLinesLine);
+		keyLineIndex = insertAt;
+	}
+	if (hideAction === 'inserted') {
+		// HIDE 的语义位置：LINES 行之后（刚插入的也算）；无 LINES 则 PATH 之后（与 keys.insertAt 同规则）
+		let at: number;
+		if (keys.linesLineIndex !== null) { at = keyLineIndex + 1 }
+		else if (linesAction === 'inserted') { at = insertAt + 1 }
+		else { at = keys.insertAt > 0 ? keys.insertAt : Math.max(1, textLines.length - 1) }
+		textLines.splice(Math.min(at, textLines.length), 0, newHideLine);
+	}
+
+	if (linesAction === 'none' && hideAction === 'none') {
+		// 幂等：LINES 已是目标值且 HIDE 无需改动 → 不产生任何写入
+		return {
+			ok: true, reason: 'unchanged', matchedBy: loc.matchedBy, mode: loc.mode,
+			startLine: loc.startLine, endLine: end, textLines, keyLineIndex,
+			oldLines, newLines: spec, newLinesLine: '', removedHideLine: '', hideAction: 'none', newHideLine: '',
+			changed: false, newText: fullText, candidates: loc.candidates, insertAt: -1, text,
+		};
+	}
+
+	const newText = lines.slice(0, loc.startLine).concat(textLines, lines.slice(end + 1)).join(eol);
+	// reason：优先 LINES 动作；仅删 HIDE 时沿用 A/B 语义命名 hide-removed-only
+	const reason = linesAction !== 'none' ? linesAction : (hideAction === 'removed' ? 'hide-removed-only' : hideAction);
+	return {
+		ok: true, reason, matchedBy: loc.matchedBy, mode: loc.mode, startLine: loc.startLine, endLine: end,
+		textLines, keyLineIndex, oldLines, newLines: spec, newLinesLine, removedHideLine, hideAction, newHideLine,
+		changed: newText !== fullText, newText, candidates: loc.candidates, insertAt, text,
+	};
+}
+
+/* ======================= g-011 增量 C：dots 段临时展开 + 选区恢复（纯视图态） ======================= */
+
+/** dots 段描述：模型行索引区间（dots run）+ 它覆盖的源行号区间。 */
+export interface EmbedDotsSegment {
+	/** dots run 的起止模型行索引（0-based，含首含尾） */
+	startIndex: number;
+	endIndex: number;
+	/** 该段覆盖的源行区间（1-based 含首含尾）：前一可见行+1 .. 后一可见行−1（两端外推到文件边界） */
+	start: number;
+	end: number;
+}
+
+/** 段标识：源行区间 start-end（LINES/HIDE 不变期间稳定；展开态 WeakMap 的键）。 */
+export function dotsSegmentId(seg: { start: number; end: number }): string {
+	return seg.start + '-' + seg.end;
+}
+
+/**
+ * 行模型里的 dots 段清单（g-011 增量 C）。dots run 覆盖的源行区间由**相邻可见行**外推：
+ * 段前最近代码行 num=p、段后最近代码行 num=q → 区间 [p+1, q−1]；块首/块尾的 dots 分别外推到
+ * 1 / totalLines。这正是「老 LINES 模型的前导/段间/尾部省略」与「HIDE 隐藏段」的统一口径。
+ * end < start（不可能出现的退化形态）时丢弃该段，宁可少一个展开入口也不给出错误区间。
+ */
+export function dotsSegmentsOfRows(rows: EmbedLineRow[], totalLines: number): EmbedDotsSegment[] {
+	const out: EmbedDotsSegment[] = [];
+	for (let i = 0; i < rows.length; i++) {
+		if (!rows[i].dot) { continue }
+		let j = i;
+		while (j + 1 < rows.length && rows[j + 1].dot) { j += 1 }
+		let p = 0;
+		for (let k = i - 1; k >= 0; k--) { if (!rows[k].dot) { p = rows[k].num; break } }
+		let q = totalLines + 1;
+		for (let k = j + 1; k < rows.length; k++) { if (!rows[k].dot) { q = rows[k].num; break } }
+		const start = p + 1;
+		const end = q - 1;
+		if (end >= start) { out.push({ startIndex: i, endIndex: j, start, end }) }
+		i = j;
+	}
+	return out;
+}
+
+/**
+ * 展开态行模型推导（渲染与重建共用的**单一事实来源**，g-011 增量 C）。
+ * 可见集合 = 当前渲染模型的可见行 ∪ 已展开段（展开段必然来自该模型 dots 的覆盖区间），
+ * 归一化合并后经既有 analyseSrcLines → buildEmbedLineRows 重建——与渲染期同一机制，
+ * 因此未展开的间隙仍是恰好一个 dots，正文/行号计划/选区映射全部可由结果模型派生。
+ * totalLines 由 srcText 派生（buildEmbedLineRows 的越界裁剪也依赖它，必须传真实源文本）。
+ * expandedIds 为空（或没有任何命中段）→ 返回原模型的拷贝（收起恒等）。
+ */
+export function buildExpandedRows(srcText: string, rows: EmbedLineRow[], expandedIds: Set<string>): EmbedLineRow[] {
+	const segs = dotsSegmentsOfRows(rows, srcText.split('\n').length);
+	const extra: LineRangeSegment[] = [];
+	for (const seg of segs) {
+		if (expandedIds.has(dotsSegmentId(seg))) { extra.push({ start: seg.start, end: seg.end }) }
+	}
+	if (!extra.length) { return rows.slice() }
+	const total = srcText.split('\n').length;
+	const visible = rowsToSourceLineRanges(rows);
+	const merged = normalizeLineRanges([...visible, ...extra], total);
+	const spec = rangesToSpec(merged, total);
+	return buildEmbedLineRows(srcText, spec ? analyseSrcLines(spec) : []);
+}
+
+/**
+ * 展开态收起符号的渲染定位（g-011 实机修复：展开后 dots 行消失，▾ 需要新载体）。
+ * 每个已展开段在其**首个幽灵行**（源行号 = 段区间 start，展开把 start..end 全部还原为真实行）
+ * 渲染 ▾；以当前渲染模型做防御性校验（start 不在模型 = 陈旧 id/模型漂移 → 跳过，绝不误挂）。
+ * 返回 Map<首幽灵行源行号, 段标识>，供行号格叠加与行号关闭模式的浮层符号共用。
+ */
+export function ghostStartNumsOfExpanded(rows: EmbedLineRow[], expandedIds: Set<string>): Map<number, string> {
+	const out = new Map<number, string>();
+	if (!expandedIds.size || !rows.length) { return out }
+	const present = new Set<number>();
+	for (const r of rows) { if (!r.dot && r.num > 0) { present.add(r.num) } }
+	expandedIds.forEach((id) => {
+		const m = /^(\d+)-(\d+)$/.exec(id);
+		if (!m) { return }
+		const start = Number(m[1]);
+		if (present.has(start)) { out.set(start, id) }
+	});
+	return out;
+}
+
+/**
+ * 「▾首 + ▴末」括号式的**末幽灵行**定位（g-011 二次实机反馈：单 ▾ 不足以标出展开区间）。
+ * 末幽灵行 = 段区间 end；与 ghostStartNumsOfExpanded 完全同构的 present 防御校验
+ * （end 不在当前模型 = 陈旧 id/模型漂移 → 跳过）。单行段 start==end 时两个映射
+ * 返回同一行号——由调用方去重（同一段同一行只挂一个符号），本函数保持纯映射。
+ */
+export function ghostEndNumsOfExpanded(rows: EmbedLineRow[], expandedIds: Set<string>): Map<number, string> {
+	const out = new Map<number, string>();
+	if (!expandedIds.size || !rows.length) { return out }
+	const present = new Set<number>();
+	for (const r of rows) { if (!r.dot && r.num > 0) { present.add(r.num) } }
+	expandedIds.forEach((id) => {
+		const m = /^(\d+)-(\d+)$/.exec(id);
+		if (!m) { return }
+		const end = Number(m[2]);
+		if (present.has(end)) { out.set(end, id) }
+	});
+	return out;
+}
+
+/**
+ * 展开态选区里的幽灵行（纯函数；main.ts 的 ghostNumsOf 直接转发）。
+ * 展开段 id 解析回区间（解析失败的 id 忽略——状态只由 dotsSegmentsOfRows 产出，不会失败），
+ * 选中行号落在任一展开区间内即为幽灵行。
+ */
+export function ghostNumsFromExpanded(nums: number[], expandedIds: Set<string>): number[] {
+	if (!expandedIds.size || !nums.length) { return [] }
+	const ranges: LineRangeSegment[] = [];
+	expandedIds.forEach((id) => {
+		const m = /^(\d+)-(\d+)$/.exec(id);
+		if (m) { ranges.push({ start: Number(m[1]), end: Number(m[2]) }) }
+	});
+	if (!ranges.length) { return [] }
+	const set = normalizeLineRanges(ranges, Number.MAX_SAFE_INTEGER);
+	return nums.filter((n) => lineInRanges(n, set));
+}
+
+/** LINES 键值 → 区间集合（与 analyseSrcLines 同源：token 序列里非零连续段即区间；非法 token 忽略）。 */
+export function linesSpecToRanges(spec: string): LineRangeSegment[] {
+	const ranges: LineRangeSegment[] = [];
+	let start = 0;
+	let end = 0;
+	for (const tk of analyseSrcLines(spec)) {
+		if (!isFinite(tk) || tk <= 0) {
+			if (start > 0) { ranges.push({ start, end }); start = 0; end = 0 }
+			continue
+		}
+		const n = Math.floor(tk);
+		if (start === 0) { start = n; end = n }
+		else if (n === end + 1) { end = n }
+		else { ranges.push({ start, end }); start = n; end = n }
+	}
+	if (start > 0) { ranges.push({ start, end }) }
+	return ranges;
+}
+
+function lineRangeSetsEqual(a: LineRangeSet, b: LineRangeSet): boolean {
+	if (a.length !== b.length) { return false }
+	for (let i = 0; i < a.length; i++) { if (a[i].start !== b[i].start || a[i].end !== b[i].end) { return false } }
+	return true;
+}
+
+/** 恢复写回的计算结果；lines=null 表示「不写 LINES 键」（原本缺省，绝不创建）。 */
+export interface RestoreComputeResult {
+	lines: string | null;
+	/** '' = HIDE 键可整行移除（或本来就没有） */
+	hide: string;
+	changed: boolean;
+}
+
+/**
+ * 恢复写回的统一语义（纯函数，g-011 增量 C 关键）：
+ * - LINES 已有值 → LINES' = LINES ∪ selected 且 HIDE' = HIDE − selected（双键联动）；
+ * - LINES 缺省 → **绝不创建 LINES 键**（否则整文件语义突变），只做 HIDE' = HIDE − selected；
+ * - HIDE 缺省/为空 → HIDE' = ''（写回侧对空值 = 不动/移除键行，天然 no-op）；
+ * - 幂等：恢复后再恢复 → selected 已不在 HIDE、已在 LINES → changed=false（调用方 Notice 不写）。
+ * selected 允许乱序/重复（内部归一化）；结果 spec 均为归一化紧凑文本（可直接交给写回管线）。
+ */
+export function restoreCompute(linesRaw: unknown, hideRaw: unknown, selected: number[], totalLines: number): RestoreComputeResult {
+	const total = isFinite(totalLines) && totalLines > 0 ? Math.floor(totalLines) : Number.MAX_SAFE_INTEGER;
+	const sel = normalizeLineRanges(lineNumsToRanges(selected), total);
+	if (!sel.length) { return { lines: null, hide: '', changed: false } }
+
+	const hideSpec = parseHideSpec(hideRaw, total);
+	const hideAfter = subtractLineRanges(hideSpec.ranges, sel, total);
+	const hideChanged = !lineRangeSetsEqual(hideAfter, hideSpec.ranges);
+
+	const linesText = linesRaw === undefined || linesRaw === null ? '' : String(linesRaw).trim();
+	if (!linesText) {
+		// LINES 缺省：绝不创建 LINES 键，只缩 HIDE
+		return { lines: null, hide: rangesToSpec(hideAfter, total), changed: hideChanged };
+	}
+
+	const linesBefore = linesSpecToRanges(linesText);
+	const linesAfter = normalizeLineRanges([...linesBefore, ...sel], total);
+	const linesChanged = !lineRangeSetsEqual(linesAfter, linesBefore);
+	return {
+		lines: rangesToSpec(linesAfter, total),
+		hide: rangesToSpec(hideAfter, total),
+		changed: hideChanged || linesChanged,
 	};
 }
 

@@ -24,6 +24,10 @@ const STRINGS_EN: Record<string, string> = {
 	cmdShowAll: 'Show all (clear hidden lines)',
 	menuHideSelectedLines: 'Hide selected code lines',
 	addEmbedCode: 'Add embed-code',
+	// g-011：仅显示选中行（写 LINES）/ HIDE 转 LINES
+	cmdShowOnlySelectedLines: 'Show only the selected code lines (writes LINES)',
+	cmdConvertHideToLines: 'Convert HIDE to LINES',
+	menuConvertHideToLines: 'Convert HIDE to LINES',
 
 	// ---- 选中隐藏：Notice / 浮动按钮 / 显示全部按钮 ----
 	noticeSelectInEmbedFirst: 'Select the code lines to hide inside an embed block, then run this command',
@@ -39,9 +43,32 @@ const STRINGS_EN: Record<string, string> = {
 	noticeNoEmbedBlock: 'No embed code block found (place the cursor inside a block or select some code first)',
 	noticeNoHiddenLines: 'This embed block currently has no hidden lines',
 	noticeShownAll: 'All lines shown (HIDE cleared)',
+	// g-011：仅显示选中行 / HIDE 转 LINES 的 Notice
+	noticeLinesAlreadySet: 'This block already has a LINES value; the existing LINES is not overwritten',
+	noticeNoHideToConvert: 'This embed block has no HIDE to convert',
+	noticeEmptyVisibleSet: 'The visible line set is empty; write abandoned',
+	noticeShowOnlyOne: 'Showing only line {n} (LINES)',
+	noticeShowOnlyMany: 'Showing only {n} lines (LINES)',
+	noticeConvertedToLines: 'Converted HIDE to LINES (rendering unchanged)',
 	floatHideSelected: 'Hide selected lines',
 	floatHideSelectedMany: 'Hide {n} selected lines',
 	floatHideTitle: "Write the selected source line numbers into this embed block's HIDE",
+	// g-011：浮层并列按钮「仅显示选中行」（仅 LINES 缺省的块出现）
+	floatShowOnlySelected: 'Show only selected lines',
+	floatShowOnlySelectedMany: 'Show only {n} selected lines',
+	floatShowOnlyTitle: "Write the selected source line numbers into this embed block's LINES and remove HIDE",
+	// g-011 增量 C：dots 段临时展开 + 恢复
+	floatRestoreSelected: 'Restore selected lines',
+	floatRestoreSelectedMany: 'Restore {n} selected lines',
+	floatRestoreTitle: 'Restore the selected lines to the visible set (LINES ∪ selected / HIDE − selected)',
+	expandDotsTitle: 'Expand hidden code lines (temporary view, does not modify the file)',
+	collapseDotsTitle: 'Collapse the expanded code lines',
+	collapseGhostTitle: 'Collapse these hidden lines',
+	noticeNoRestorableLines: 'No restorable lines in the selection (select expanded hidden lines)',
+	noticeNothingToRestore: 'Those lines are already visible; nothing to restore',
+	noticeRestoredOne: 'Restored line {n}',
+	noticeRestoredMany: 'Restored {n} lines',
+	noticeExpandFailed: 'Expansion failed (source content unavailable); reverted',
 	hideAllBtnTitle: "Clear this block's HIDE",
 	hideAllBtnText: 'Show all ({n} lines hidden)',
 
@@ -54,6 +81,8 @@ const STRINGS_EN: Record<string, string> = {
 	noticeWriteFailed: 'Write-back failed, see the console for details',
 	reasonSourceFileNotFound: 'source file not found',
 	reasonCannotReadFile: 'cannot read file content',
+	// g-011：updateLinesInSection 的空 LINES 拒绝（reason 中文原文是键，见 REASON_KEYS）
+	reasonEmptyLinesSpec: 'LINES value is empty; write abandoned',
 	// 与 utils.ts applyHideToFullText 的中文 reason 一一对应（见 tReason），仅作 Notice 侧翻译
 	reasonLocateFailedFullText: 'cannot locate the embed block in the full text (no fence candidates and an invalid section hint)',
 
@@ -119,6 +148,10 @@ const STRINGS_ZH: Record<string, string> = {
 	cmdShowAll: '显示全部（清除隐藏）',
 	menuHideSelectedLines: '隐藏选中的代码行',
 	addEmbedCode: '添加 embed 代码块',
+	// g-011：仅显示选中行（写 LINES）/ HIDE 转 LINES
+	cmdShowOnlySelectedLines: '仅显示选中的代码行（写入 LINES）',
+	cmdConvertHideToLines: '将 HIDE 转为 LINES',
+	menuConvertHideToLines: '将 HIDE 转为 LINES',
 
 	// ---- 选中隐藏：Notice / 浮动按钮 / 显示全部按钮 ----
 	noticeSelectInEmbedFirst: '请在 embed 代码块内选中要隐藏的代码行，再执行此命令',
@@ -134,9 +167,32 @@ const STRINGS_ZH: Record<string, string> = {
 	noticeNoEmbedBlock: '未找到 embed 代码块（请把光标放进块内或先选中代码）',
 	noticeNoHiddenLines: '该 embed 块当前没有隐藏行',
 	noticeShownAll: '已显示全部行（清除 HIDE）',
+	// g-011：仅显示选中行 / HIDE 转 LINES 的 Notice
+	noticeLinesAlreadySet: '该块已设置 LINES，不覆盖既有 LINES',
+	noticeNoHideToConvert: '该块没有 HIDE，无需转换',
+	noticeEmptyVisibleSet: '可见行集合为空，已放弃写入',
+	noticeShowOnlyOne: '仅显示第 {n} 行（LINES）',
+	noticeShowOnlyMany: '仅显示 {n} 行（LINES）',
+	noticeConvertedToLines: '已将 HIDE 转为 LINES（渲染不变）',
 	floatHideSelected: '隐藏选中行',
 	floatHideSelectedMany: '隐藏选中 {n} 行',
 	floatHideTitle: '把选中的源行号写入该 embed 块的 HIDE',
+	// g-011：浮层并列按钮「仅显示选中行」（仅 LINES 缺省的块出现）
+	floatShowOnlySelected: '仅显示选中行',
+	floatShowOnlySelectedMany: '仅显示选中 {n} 行',
+	floatShowOnlyTitle: '把选中的源行号写入该 embed 块的 LINES，并移除 HIDE',
+	// g-011 增量 C：dots 段临时展开 + 恢复
+	floatRestoreSelected: '恢复选中行',
+	floatRestoreSelectedMany: '恢复选中 {n} 行',
+	floatRestoreTitle: '把选中的行恢复进可见集合（LINES∪选中 / HIDE−选中）',
+	expandDotsTitle: '展开隐藏的代码行（临时视图，不修改文件）',
+	collapseDotsTitle: '收起展开的代码行',
+	collapseGhostTitle: '收起此段隐藏行',
+	noticeNoRestorableLines: '选区里没有可恢复的行（请选中展开出的隐藏行）',
+	noticeNothingToRestore: '这些行已在可见集合中，无需恢复',
+	noticeRestoredOne: '已恢复第 {n} 行',
+	noticeRestoredMany: '已恢复 {n} 行',
+	noticeExpandFailed: '展开失败（源内容不可用），已回滚',
 	hideAllBtnTitle: '清除该块的 HIDE',
 	hideAllBtnText: '显示全部（{n} 行已隐藏）',
 
@@ -149,6 +205,7 @@ const STRINGS_ZH: Record<string, string> = {
 	noticeWriteFailed: '写回失败，详见控制台',
 	reasonSourceFileNotFound: '找不到源文件',
 	reasonCannotReadFile: '无法读取文件内容',
+	reasonEmptyLinesSpec: 'LINES 值为空，已拒绝写入',
 	reasonLocateFailedFullText: '无法在全文里定位 embed 块（围栏扫描无候选且节区提示无效）',
 
 	// ---- 代码块内渲染错误 ----
@@ -203,6 +260,8 @@ const STRINGS_ZH: Record<string, string> = {
 /** 该 reason 同时被 console 诊断与夹具 5h-7 按原文断言，必须保持原文不动，故只做展示层映射。 */
 const REASON_KEYS: Record<string, string> = {
 	'无法在全文里定位 embed 块（围栏扫描无候选且节区提示无效）': 'reasonLocateFailedFullText',
+	// g-011：updateLinesInSection 对空 LINES 的拒绝分支（zh 原文即 utils 里的 reason 字面量）
+	'LINES 值为空，已拒绝写入': 'reasonEmptyLinesSpec',
 };
 
 let currentLocale: LocaleLang = 'en';
