@@ -6,6 +6,7 @@ import { analyseSrcLines, extractSrcLines, buildEmbedLineRows, buildFullFileRows
   applyHideToFullText, computeMinimalDiff, describeText, describeSectionInfo, describeInfoTextFlavor, describeFence, describeUpdate,
   mergeConsecutiveDots, computeHideAllButtonRight, isUsableButtonRect, DEFAULT_CORE_BUTTON_SELECTORS,
   buildVisibleRowsForHide } from './utils.ts';
+import { normalizeLocale, initI18n, locale, t, tReason } from './i18n.ts';
 
 let fail = 0;
 const check = (cond, label) => { if (!cond) { fail++; console.log('  FAIL ' + label); } };
@@ -527,6 +528,38 @@ check(jOffset.right === 106, '5j 块 left=100/width=400（right=500）→ right=
 // 5j-9 默认核心按钮选择器数组可配置
 check(Array.isArray(DEFAULT_CORE_BUTTON_SELECTORS) && DEFAULT_CORE_BUTTON_SELECTORS.length === 3 && DEFAULT_CORE_BUTTON_SELECTORS.indexOf('.copy-code-button') >= 0 && DEFAULT_CORE_BUTTON_SELECTORS.indexOf('.code-block-flair') >= 0, '5j 默认选择器含 copy/edit/flair');
 console.log('断言5j 显示全部按钮避让几何：' + (fail === failBase ? 'PASS' : 'FAIL'));
+failBase = fail;
+
+// ---------- 断言 6：g-010 i18n 纯函数（语言选择回退链 / 缺键回退 / 占位替换 / reason 映射） ----------
+// 6a normalizeLocale：zh 家族（zh/zh-CN/zh-TW/zh_Hans，大小写不敏感）→ zh；其余（含空串/空白）→ en
+check(normalizeLocale('zh') === 'zh' && normalizeLocale('zh-CN') === 'zh' && normalizeLocale('zh-TW') === 'zh' && normalizeLocale(' zh_Hans ') === 'zh', '6a zh 家族 → zh');
+check(normalizeLocale('en') === 'en' && normalizeLocale('en-GB') === 'en' && normalizeLocale('ja') === 'en' && normalizeLocale('') === 'en' && normalizeLocale('   ') === 'en', '6a 非 zh（含空串/空白）→ en');
+// 6b initI18n 候选链：按顺序取第一个非空候选定型（调用方保证 moment 优先、navigator 兜底）
+check(initI18n(['zh-CN', 'en']) === 'zh' && locale() === 'zh', '6b 首个非空候选 zh → zh');
+check(initI18n(['en-GB', 'zh']) === 'en' && locale() === 'en', '6b 首个非空候选 en → en（zh 候选被跳过）');
+check(initI18n([null, undefined, '', '  ', 'zh']) === 'zh', '6b 空候选/空白候选跳过 → 兜底候选生效');
+check(initI18n([]) === 'en' && initI18n([null]) === 'en' && initI18n(['']) === 'en', '6b 全部候选为空 → en（不抛错）');
+// 6c zh 取值 / 缺键回退链：zh 表 → zh 缺键回退 en → 双缺回退 key 本身（不抛错、无占位标记）
+initI18n(['zh']);
+check(t('hideAllBtnText', { n: 3 }) === '显示全部（3 行已隐藏）', '6c zh 表 + {n} 占位替换');
+check(t('noticeHiddenOne', { n: 7 }) === '已隐藏第 7 行', '6c zh 单行隐藏文案');
+check(t('noticeWriteAbandoned', { reason: 'x' }) === '已放弃写入：x', '6c zh 带参文案');
+check(t('fixtureOnlyEnKey') === 'EN_ONLY', '6c zh 缺键回退 en 表');
+check(t('__no_such_key__') === '__no_such_key__', '6c 双缺回退 key 本身（不抛错、不渲染占位标记）');
+check(t('__no_such_key__', { n: 1 }) === '__no_such_key__', '6c 双缺 + 带参仍回退 key 本身');
+// 6d en 取值 / 占位符边界
+initI18n(['en']);
+check(t('hideAllBtnText', { n: 3 }) === 'Show all (3 lines hidden)', '6d en 表 + {n} 占位替换');
+check(t('noticeHiddenOne', { n: 7 }) === 'Hidden line 7', '6d en 单行隐藏文案');
+check(t('hideAllBtnText') === 'Show all ({n} lines hidden)', '6d 缺参时占位符原样保留（不抛错）');
+check(t('floatHideTitle', { unknown: 1 }) === "Write the selected source line numbers into this embed block's HIDE", '6d 未知参数名不影响文案');
+// 6e tReason：utils 中文 reason（夹具 5h-7 按原文断言的值）→ 文案键映射；未知 reason 透传
+initI18n(['zh']);
+check(tReason('无法在全文里定位 embed 块（围栏扫描无候选且节区提示无效）') === '无法在全文里定位 embed 块（围栏扫描无候选且节区提示无效）', '6e zh 下 tReason 与原文逐字一致（零回归）');
+initI18n(['en']);
+check(tReason('无法在全文里定位 embed 块（围栏扫描无候选且节区提示无效）').indexOf('cannot locate the embed block') === 0, '6e en 下 tReason 给出英文说明');
+check(tReason('unchanged') === 'unchanged' && tReason('') === '' , '6e 未知 reason / 空 reason 透传');
+console.log('断言6 g-010 i18n 纯函数（语言链/缺键回退/占位/reason 映射）：' + (fail === failBase ? 'PASS' : 'FAIL'));
 failBase = fail;
 
 console.log(fail === 0 ? 'FIXTURE ALL PASS' : 'FIXTURE FAILED: ' + fail);

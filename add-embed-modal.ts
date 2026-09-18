@@ -1,5 +1,6 @@
 import { App, DropdownComponent, Editor, Modal, Notice, prepareFuzzySearch, Setting, TFile } from 'obsidian';
 import { EmbedCodeFileSettings } from "./settings";
+import { t } from "./i18n";
 
 /**
  * 扩展名 → 语言候选映射（g-003 负责人钦定需求）。
@@ -126,21 +127,21 @@ export class AddEmbedCodeModal extends Modal {
 
 	onOpen() {
 		this.modalEl.addClass('embed-add-modal');
-		this.titleEl.setText('Add embed-code');
+		this.titleEl.setText(t('addEmbedCode'));
 
 		// ---- 代码来源（分段切换）----
-		const sourceSetting = new Setting(this.contentEl).setName('代码来源');
+		const sourceSetting = new Setting(this.contentEl).setName(t('modalSource'));
 		const seg = sourceSetting.controlEl.createDiv('embed-add-source-buttons');
-		this.vaultButton = seg.createEl('button', { text: '📁 Vault 文件' });
-		this.remoteButton = seg.createEl('button', { text: '☁️ 远程 URL' });
+		this.vaultButton = seg.createEl('button', { text: t('modalSourceVault') });
+		this.remoteButton = seg.createEl('button', { text: t('modalSourceRemote') });
 		this.vaultButton.addEventListener('click', () => this.setMode('vault'));
 		this.remoteButton.addEventListener('click', () => this.setMode('remote'));
 		this.vaultButton.classList.add('mod-cta');
 
 		// ---- 文件路径（vault，输入即模糊搜索）----
 		this.pathSetting = new Setting(this.contentEl)
-			.setName('文件路径')
-			.setDesc('输入即搜索库内文件，自动携带 vault:// 前缀；选中后按扩展名自动匹配语言。')
+			.setName(t('modalPath'))
+			.setDesc(t('modalPathDesc'))
 			.addText(text => {
 				text.setPlaceholder('vault://Code/main.cpp');
 				this.pathInput = text.inputEl;
@@ -160,8 +161,8 @@ export class AddEmbedCodeModal extends Modal {
 
 		// ---- 远程 URL ----
 		this.urlSetting = new Setting(this.contentEl)
-			.setName('远程 URL')
-			.setDesc('GitHub 等平台请使用 raw.githubusercontent.com 链接。')
+			.setName(t('modalRemoteUrl'))
+			.setDesc(t('modalRemoteUrlDesc'))
 			.addText(text => {
 				text.setPlaceholder('https://raw.githubusercontent.com/user/repo/main/main.ts');
 				this.urlInput = text.inputEl;
@@ -171,8 +172,8 @@ export class AddEmbedCodeModal extends Modal {
 
 		// ---- 语言 ----
 		new Setting(this.contentEl)
-			.setName('语言')
-			.setDesc('选项来自设置页 Included Languages；无扩展名匹配时保持当前选择。')
+			.setName(t('modalLanguage'))
+			.setDesc(t('modalLanguageDesc'))
 			.addDropdown(dd => {
 				this.langDropdown = dd;
 				const options: Record<string, string> = {};
@@ -189,10 +190,10 @@ export class AddEmbedCodeModal extends Modal {
 
 		// ---- 行范围 LINES（选区预填）----
 		new Setting(this.contentEl)
-			.setName('行范围 LINES')
-			.setDesc('如 2,9,30-40；留空 = 嵌入全部行。编辑器有选区时自动预填选区行号。')
+			.setName(t('modalLines'))
+			.setDesc(t('modalLinesDesc'))
 			.addText(text => {
-				text.setPlaceholder('如 2,9,30-40；留空 = 嵌入全部行');
+				text.setPlaceholder(t('modalLinesPlaceholder'));
 				text.setValue(this.selectionLinesPrefill());
 				this.linesInput = text.inputEl;
 				this.linesInput.addEventListener('input', () => this.updatePreview());
@@ -200,26 +201,26 @@ export class AddEmbedCodeModal extends Modal {
 
 		// ---- 标题 TITLE ----
 		new Setting(this.contentEl)
-			.setName('标题 TITLE')
-			.setDesc('留空则省略该行，渲染时回退为 PATH。')
+			.setName(t('modalTitle'))
+			.setDesc(t('modalTitleDesc'))
 			.addText(text => {
-				text.setPlaceholder('留空则显示 PATH 作为标题');
+				text.setPlaceholder(t('modalTitlePlaceholder'));
 				this.titleInput = text.inputEl;
 				this.titleInput.addEventListener('input', () => this.updatePreview());
 			});
 
 		// ---- 插入预览（实时）----
 		new Setting(this.contentEl)
-			.setName('插入预览（实时）')
-			.setDesc('将要插入到光标处的完整代码块。');
+			.setName(t('modalPreview'))
+			.setDesc(t('modalPreviewDesc'));
 		this.previewEl = this.contentEl.createDiv('embed-add-preview');
 		this.updatePreview();
 
 		// ---- 底部按钮 ----
 		const buttons = this.contentEl.createDiv('modal-button-container');
-		const cancelBtn = buttons.createEl('button', { text: '取消' });
+		const cancelBtn = buttons.createEl('button', { text: t('modalCancel') });
 		cancelBtn.addEventListener('click', () => this.close());
-		const insertBtn = buttons.createEl('button', { text: '插入 embed 块', cls: 'mod-cta' });
+		const insertBtn = buttons.createEl('button', { text: t('modalInsert'), cls: 'mod-cta' });
 		insertBtn.addEventListener('click', () => this.insertBlock());
 	}
 
@@ -455,7 +456,7 @@ export class AddEmbedCodeModal extends Modal {
 		const lang = this.currentLang();
 		if (!path || !lang) {
 			this.previewEl.createSpan('embed-add-preview-dim')
-				.setText('# 填写路径后在此实时预览将要插入的代码块…');
+				.setText(t('modalPreviewEmpty'));
 			return;
 		}
 		const lines = this.linesInput.value.trim();
@@ -479,13 +480,13 @@ export class AddEmbedCodeModal extends Modal {
 	private insertBlock() {
 		const path = this.currentPath();
 		if (!path) {
-			new Notice('请先填写 Vault 文件路径或远程 URL');
+			new Notice(t('noticePathRequired'));
 			(this.mode === 'vault' ? this.pathInput : this.urlInput).focus();
 			return;
 		}
 		const lang = this.currentLang();
 		if (!lang) {
-			new Notice('设置页 Included Languages 为空，请先在插件设置中配置语言');
+			new Notice(t('noticeLangsEmpty'));
 			return;
 		}
 		const lines = this.linesInput.value.trim();

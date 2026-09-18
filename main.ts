@@ -1,13 +1,39 @@
-import { Plugin, MarkdownRenderer, TFile, MarkdownPostProcessorContext, MarkdownView, Notice, Editor, parseYaml, requestUrl} from 'obsidian';
+import { Plugin, MarkdownRenderer, TFile, MarkdownPostProcessorContext, MarkdownView, Notice, Editor, parseYaml, requestUrl, moment} from 'obsidian';
 import { EmbedCodeFileSettings, EmbedCodeFileSettingTab, DEFAULT_SETTINGS, LineNumberMode} from "./settings";
 import { analyseSrcLines, extractSrcLines, buildEmbedLineRows, buildFullFileRows, buildLineGutterPlan, resolveLineTops, contentLineCount, pickFirstPositiveRect, geometricLinePitch, resolveLinePitch, EmbedLineRow, LineGutterPlan, LineRangeSet, normalizeLineRanges, applyHideToRows, hasVisibleCodeRow, rowsToSourceLineRanges, subtractLineRanges, rangesToSpec, parseHideSpec, lineStartOffsets, selectionRowRange, collectSourceLineNums, lineNumsToRanges, updateHideInSection, EmbedHideSpec, EmbedSelectionRows, gutterSpanSourceLineNums, gutterSpanRangeToSourceLineNums, clampGutterSpanRange, applyHideToFullText, computeMinimalDiff, contentTailOf, describeText, describeSectionInfo, describeInfoTextFlavor, describeFence, describeUpdate, computeHideAllButtonRight, DEFAULT_CORE_BUTTON_SELECTORS, buildVisibleRowsForHide } from "./utils";
 import { AddEmbedCodeModal } from "./add-embed-modal";
+import { initI18n, t, tReason } from "./i18n";
+
+/** g-010：Obsidian 界面语言原始值（moment.locale()）；拿不到返回空串（冒烟桩等无 moment 环境兜底）。 */
+function obsidianLocaleRaw(): string {
+	try {
+		const loc = moment.locale();
+		return loc ? String(loc) : '';
+	} catch (e) {
+		return '';
+	}
+}
+
+// g-010：环境探测（moment/navigator）留在这里而非 i18n.ts —— i18n.ts 保持零依赖纯函数，
+// 离线夹具（裸 Node）才能直接导入断言。
+/** g-010：navigator.language 兜底；无 navigator 环境返回空串。 */
+function navigatorLocaleRaw(): string {
+	try {
+		return (typeof navigator !== 'undefined' && navigator.language) ? String(navigator.language) : '';
+	} catch (e) {
+		return '';
+	}
+}
 
 export default class EmbedCodeFile extends Plugin {
 	settings: EmbedCodeFileSettings;
 
 	async onload() {
 		await this.loadSettings();
+
+		// g-010：界面语言在加载时定型 —— 跟随 Obsidian 界面语言（moment.locale() 优先，
+		// navigator.language 兜底）；不做运行时热切换，Obsidian 换语言后重载插件生效。
+		initI18n([obsidianLocaleRaw(), navigatorLocaleRaw()]);
 
 		this.addSettingTab(new EmbedCodeFileSettingTab(this.app, this));
 
@@ -31,7 +57,7 @@ export default class EmbedCodeFile extends Plugin {
 			this.app.workspace.on('editor-menu', (menu, editor) => {
 				menu.addItem((item) => {
 					item
-						.setTitle('Add embed-code')
+						.setTitle(t('addEmbedCode'))
 						.setIcon('code-glyph')
 						.onClick(() => {
 							new AddEmbedCodeModal(this.app, this.settings, editor).open();
@@ -58,13 +84,13 @@ export default class EmbedCodeFile extends Plugin {
 			try {
 				metaYaml = parseYaml(meta)
 			} catch(e) {
-				await MarkdownRenderer.renderMarkdown("`ERROR: invalid embedding (invalid YAML)`", el, '', this)
+				await MarkdownRenderer.renderMarkdown('`' + t('renderInvalidYaml') + '`', el, '', this)
 				return
 			}
 
 			let srcPath = metaYaml.PATH
 			if (!srcPath) {
-				await MarkdownRenderer.renderMarkdown("`ERROR: invalid source path`", el, '', this)
+				await MarkdownRenderer.renderMarkdown('`' + t('renderInvalidSourcePath') + '`', el, '', this)
 				return
 			}
 
@@ -73,7 +99,7 @@ export default class EmbedCodeFile extends Plugin {
 					let httpResp = await requestUrl({url: srcPath, method: "GET"})
 					fullSrc = httpResp.text
 				} catch(e) {
-					const errMsg = `\`ERROR: could't fetch '${srcPath}'\``
+					const errMsg = '`' + t('renderFetchFailed', { path: srcPath }) + '`'
 					await MarkdownRenderer.renderMarkdown(errMsg, el, '', this)
 					return
 				}
@@ -84,12 +110,12 @@ export default class EmbedCodeFile extends Plugin {
 				if (tFile instanceof TFile) {
 					fullSrc = await app.vault.read(tFile)
 				} else {
-					const errMsg = `\`ERROR: could't read file '${srcPath}'\``
+					const errMsg = '`' + t('renderReadFailed', { path: srcPath }) + '`'
 					await MarkdownRenderer.renderMarkdown(errMsg, el, '', this)
 					return
 				}
 			} else {
-				const errMsg = "`ERROR: invalid source path, use 'vault://...' or 'http[s]://...'`"
+				const errMsg = '`' + t('renderInvalidSourcePathHint') + '`'
 				await MarkdownRenderer.renderMarkdown(errMsg, el, '', this)
 				return
 			}
@@ -266,7 +292,7 @@ export default class EmbedCodeFile extends Plugin {
 	registerHideCommands() {
 		this.addCommand({
 			id: 'hide-selected-lines',
-			name: '隐藏选中的代码行（embed 块内选区，写入 HIDE）',
+			name: t('cmdHideSelectedLines'),
 			hotkeys: [{ modifiers: ['Mod', 'Shift'], key: 'H' }],
 			checkCallback: (checking: boolean) => {
 				const embed = this.resolveEmbedFromEditor();
@@ -278,7 +304,7 @@ export default class EmbedCodeFile extends Plugin {
 
 		this.addCommand({
 			id: 'clear-hidden-lines',
-			name: '显示全部（清除隐藏）',
+			name: t('cmdShowAll'),
 			checkCallback: (checking: boolean) => {
 				const embed = this.resolveEmbedFromEditor();
 				if (!embed) { return false }
@@ -295,11 +321,11 @@ export default class EmbedCodeFile extends Plugin {
 				if (!embed) { return }
 				const hasHidden = !!(embed.el.dataset.embedHideSpec || '').trim();
 				menu.addItem((item) => item
-					.setTitle('隐藏选中的代码行')
+					.setTitle(t('menuHideSelectedLines'))
 					.setIcon('eye-off')
 					.onClick(() => { this.hideSelectedLines(embed.el) }));
 				menu.addItem((item) => item
-					.setTitle('显示全部（清除隐藏）')
+					.setTitle(t('cmdShowAll'))
 					.setIcon('eye')
 					.setDisabled(!hasHidden)
 					.onClick(() => { this.clearHiddenLinesFromResolved(embed) }));
@@ -314,7 +340,7 @@ export default class EmbedCodeFile extends Plugin {
 	hideSelectedLines(el: HTMLElement) {
 		const info = this.resolveSelectionHide();
 		if (!info || info.el !== el) {
-			new Notice('请在 embed 代码块内选中要隐藏的代码行，再执行此命令');
+			new Notice(t('noticeSelectInEmbedFirst'));
 			return;
 		}
 		this.hideSelectionFromResolved(info);
@@ -470,8 +496,8 @@ export default class EmbedCodeFile extends Plugin {
 		this.removeHideFloatButton();
 		const btn = document.createElement('button');
 		btn.className = 'embed-hide-float';
-		btn.setText(count > 1 ? `隐藏选中 ${count} 行` : '隐藏选中行');
-		btn.title = '把选中的源行号写入该 embed 块的 HIDE';
+		btn.setText(count > 1 ? t('floatHideSelectedMany', { n: count }) : t('floatHideSelected'));
+		btn.title = t('floatHideTitle');
 		btn.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation() }, true);
 		btn.addEventListener('click', (e) => {
 			e.preventDefault();
@@ -479,7 +505,7 @@ export default class EmbedCodeFile extends Plugin {
 			this.removeHideFloatButton();
 			if (onClick) { onClick(); return }
 			const info = this.resolveSelectionHide();
-			if (!info) { new Notice('未找到有效选区（请在 embed 代码块内选中整行代码）'); return }
+			if (!info) { new Notice(t('noticeNoValidSelection')); return }
 			this.hideSelectionFromResolved(info);
 		});
 		document.body.appendChild(btn);
@@ -579,14 +605,14 @@ export default class EmbedCodeFile extends Plugin {
 		// 单击（起点=终点）→ 立即隐藏该行，无二次确认
 		if (lo === hi) {
 			const num = this.gutterSourceLineNumForSpan(el, lo);
-			if (num === null) { new Notice('该行号已不可用（块可能已重新渲染），请重试'); return }
+			if (num === null) { new Notice(t('noticeGutterLineUnavailable')); return }
 			this.hideLinesFromGutter(el, [num]);
 			return;
 		}
 
 		// 拖选多行 → 浮出确认按钮（按住 Ctrl/Cmd 则按下即隐藏，便于连续操作）
 		const nums = gutterSpanRangeToSourceLineNums(this.readEmbedRows(el) ?? [], lo, hi);
-		if (!nums.length) { new Notice('没有可隐藏的代码行'); return }
+		if (!nums.length) { new Notice(t('noticeNoHideableLines')); return }
 		if (e.ctrlKey || e.metaKey) { this.hideLinesFromGutter(el, nums); return }
 		const anchor = this.gutterSpansRect(spans, lo, hi);
 		this.showHideFloatButton(el, nums.length, anchor, () => {
@@ -673,18 +699,18 @@ export default class EmbedCodeFile extends Plugin {
 	 */
 	hideLinesFromGutter(el: HTMLElement, nums: number[]) {
 		const rows = this.readEmbedRows(el);
-		if (!rows || !rows.length) { new Notice('无法读取该块的行模型（请重新打开笔记再试）'); return }
-		if (!nums.length) { new Notice('没有可隐藏的代码行'); return }
+		if (!rows || !rows.length) { new Notice(t('noticeCannotReadRowModel')); return }
+		if (!nums.length) { new Notice(t('noticeNoHideableLines')); return }
 		const hiddenNow = parseHideSpec(el.dataset.embedHideSpec || '', Number.MAX_SAFE_INTEGER);
 		const merged = normalizeLineRanges([...hiddenNow.ranges, ...lineNumsToRanges(nums)], Number.MAX_SAFE_INTEGER);
 		const remaining = applyHideToRows(rows, merged);
 		const newly = remaining.hiddenNums.filter((n) => !hiddenNow.ranges.some((r) => n >= r.start && n <= r.end));
-		if (!newly.length) { new Notice('这些行已经隐藏了'); return }
+		if (!newly.length) { new Notice(t('noticeAlreadyHidden')); return }
 		if (!hasVisibleCodeRow(remaining.rows)) {
-			new Notice('不能隐藏全部代码行（会产生空块）；请至少保留一行');
+			new Notice(t('noticeCannotHideAll'));
 			return;
 		}
-		const msg = newly.length === 1 ? `已隐藏第 ${newly[0]} 行` : `已隐藏 ${newly.length} 行`;
+		const msg = newly.length === 1 ? t('noticeHiddenOne', { n: newly[0] }) : t('noticeHiddenMany', { n: newly.length });
 		this.applyHideValue(el, rangesToSpec(merged, Number.MAX_SAFE_INTEGER), msg);
 	}
 
@@ -755,16 +781,16 @@ export default class EmbedCodeFile extends Plugin {
 	}
 
 	hideSelectionFromResolved(resolved: { el: HTMLElement | null; rows: EmbedLineRow[]; nums: number[] } | null) {
-		if (!resolved || !resolved.el) { new Notice('未找到有效选区（请在 embed 代码块内选中整行代码）'); return }
+		if (!resolved || !resolved.el) { new Notice(t('noticeNoValidSelection')); return }
 		const { el, nums } = resolved;
-		if (!nums.length) { new Notice('选区只覆盖了省略行（...），没有可隐藏的代码行'); return }
+		if (!nums.length) { new Notice(t('noticeSelectionOnlyDots')); return }
 		this.hideLinesFromGutter(el, nums);
 	}
 
 	clearHiddenLinesFromResolved(resolved: { el: HTMLElement } | null) {
-		if (!resolved) { new Notice('未找到 embed 代码块（请把光标放进块内或先选中代码）'); return }
-		if (!(resolved.el.dataset.embedHideSpec || '').trim()) { new Notice('该 embed 块当前没有隐藏行'); return }
-		this.applyHideValue(resolved.el, '', '已显示全部行（清除 HIDE）');
+		if (!resolved) { new Notice(t('noticeNoEmbedBlock')); return }
+		if (!(resolved.el.dataset.embedHideSpec || '').trim()) { new Notice(t('noticeNoHiddenLines')); return }
+		this.applyHideValue(resolved.el, '', t('noticeShownAll'));
 	}
 
 	/**
@@ -788,12 +814,12 @@ export default class EmbedCodeFile extends Plugin {
 		if (!btn) {
 			btn = document.createElement('button');
 			btn.className = 'embed-hide-all-btn';
-			btn.title = '清除该块的 HIDE';
+			btn.title = t('hideAllBtnTitle');
 			btn.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation() });
 			btn.addEventListener('click', (e) => {
 				e.preventDefault();
 				e.stopPropagation();
-				this.applyHideValue(el, '', '已显示全部行（清除 HIDE）');
+				this.applyHideValue(el, '', t('noticeShownAll'));
 			});
 			pre.appendChild(btn);
 			// 核心按钮常在悬停时才完整布局 → 每次进入该块时重算一次位置
@@ -804,7 +830,7 @@ export default class EmbedCodeFile extends Plugin {
 			// 核心按钮可能是异步插入的（Obsidian 在渲染后挂 copy/edit 按钮）→ 下一帧再算一次
 			window.setTimeout(() => { if (el.isConnected) { this.applyHideAllButtonPosition(el) } }, 50);
 		}
-		btn.setText(`显示全部（${hiddenCount} 行已隐藏）`);
+		btn.setText(t('hideAllBtnText', { n: hiddenCount }));
 		this.applyHideAllButtonPosition(el);
 	}
 
@@ -845,7 +871,7 @@ export default class EmbedCodeFile extends Plugin {
 		const ctx = this.embedSections.get(el);
 		if (!ctx) {
 			console.warn('[embed-code-file][g-009] 写回中止', { ...log, branch: 'abort-no-context', abort: '找不到该块的渲染上下文' });
-			new Notice('无法定位该 embed 块的源位置（请重新打开笔记再试）');
+			new Notice(t('noticeCannotLocateSource'));
 			return;
 		}
 
@@ -855,7 +881,7 @@ export default class EmbedCodeFile extends Plugin {
 		if (!info) {
 			// getSectionInfo 返回 null：不再当作中止依据（dev 版本常见），改用日志中记录的提示继续定位
 			console.warn('[embed-code-file][g-009] 写回中止', { ...log, branch: 'abort-no-section-info', abort: 'getSectionInfo 返回 null，无行号提示可定位' });
-			new Notice('无法定位该 embed 块的源位置（getSectionInfo 返回空），已放弃写入');
+			new Notice(t('noticeCannotLocateSourceNoInfo'));
 			return;
 		}
 
@@ -870,7 +896,7 @@ export default class EmbedCodeFile extends Plugin {
 			let fullText = '';
 			try { fullText = editor.getValue() } catch (e) {
 				console.warn('[embed-code-file][g-009] 写回中止', { ...log, branch: 'abort-editor-getValue-threw', sourcePath, path: pathKind, abort: String(e) });
-				new Notice('写回失败：读取编辑器内容异常，详见控制台');
+				new Notice(t('noticeWriteFailedEditorRead'));
 				return;
 			}
 			const plan = applyHideToFullText(fullText, hideSpec, hint, log.meta);
@@ -883,13 +909,13 @@ export default class EmbedCodeFile extends Plugin {
 			log.update = describeUpdate(plan);
 			if (!plan.ok) {
 				console.warn('[embed-code-file][g-009] 写回中止', { ...log, branch: 'abort-locate-failed', abort: plan.reason });
-				new Notice('已放弃写入：' + plan.reason);
+				new Notice(t('noticeWriteAbandoned', { reason: tReason(plan.reason) }));
 				return;
 			}
 			if (!plan.changed) {
 				// 幂等：内容已一致，不做任何写入（也不报「没有需要写入的改动」以外的错）
 				console.log('[embed-code-file][g-009] HIDE 写入', { ...log, branch: 'noop-unchanged', result: 'unchanged' });
-				new Notice('没有需要写入的改动');
+				new Notice(t('noticeNoChanges'));
 				return;
 			}
 			const diff = computeMinimalDiff(fullText, plan.newText);
@@ -907,14 +933,14 @@ export default class EmbedCodeFile extends Plugin {
 
 		if (!file) {
 			console.warn('[embed-code-file][g-009] 写回中止', { ...log, branch: 'abort-no-file', sourcePath, path: pathKind, abort: '找不到源文件（ctx.sourcePath 未命中 vault）' });
-			new Notice('已放弃写入：找不到源文件');
+			new Notice(t('noticeWriteAbandoned', { reason: t('reasonSourceFileNotFound') }));
 			return;
 		}
 
 		this.writeHideToVault(log, file, hideSpec, hint, successMsg)
 			.catch((e) => {
 				console.error('[embed-code-file][g-009] 写回失败', { ...log, branch: 'abort-vault-write-threw', sourcePath, path: 'vault', error: String(e) });
-				new Notice('写回失败，详见控制台');
+				new Notice(t('noticeWriteFailed'));
 			});
 	}
 
@@ -951,14 +977,14 @@ export default class EmbedCodeFile extends Plugin {
 			log.update = describeUpdate(plan);
 		}
 		if (!plan || !plan.ok) {
-			const abort = plan ? plan.reason : '无法读取文件内容';
+			const abort = plan ? plan.reason : t('reasonCannotReadFile');
 			console.warn('[embed-code-file][g-009] 写回中止', { ...log, branch: 'abort-locate-failed', abort });
-			new Notice('已放弃写入：' + abort);
+			new Notice(t('noticeWriteAbandoned', { reason: tReason(abort) }));
 			return;
 		}
 		if (!plan.changed) {
 			console.log('[embed-code-file][g-009] HIDE 写入', { ...log, branch: 'noop-unchanged', result: 'unchanged' });
-			new Notice('没有需要写入的改动');
+			new Notice(t('noticeNoChanges'));
 			return;
 		}
 		console.log('[embed-code-file][g-009] HIDE 写入', {

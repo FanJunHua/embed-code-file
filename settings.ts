@@ -1,6 +1,7 @@
 import EmbedCodeFile from './main';
 
 import { PluginSettingTab, Setting, App } from 'obsidian';
+import { t } from './i18n';
 
 /**
  * 行号显示模式（g-005，与已批原型 docs/ui-mockup-line-numbers.html §1/§5 一致）：
@@ -40,13 +41,13 @@ export class EmbedCodeFileSettingTab extends PluginSettingTab {
 		const {containerEl} = this;
 
 		containerEl.empty();
-		containerEl.createEl('h2', {text: 'Embed Code File Settings'});
+		containerEl.createEl('h2', {text: t('settingsHeading')});
 
 		new Setting(containerEl)
-			.setName('Included Languages')
-			.setDesc('Comma separated list of included languages.')
+			.setName(t('settingsIncludedLanguages'))
+			.setDesc(t('settingsIncludedLanguagesDesc'))
 			.addText(text => text
-				.setPlaceholder('Comma separated list')
+				.setPlaceholder(t('settingsIncludedLanguagesPlaceholder'))
 				.setValue(this.plugin.settings.includedLanguages)
 				.onChange(async (value) => {
 					this.plugin.settings.includedLanguages = value;
@@ -55,13 +56,13 @@ export class EmbedCodeFileSettingTab extends PluginSettingTab {
 
 		// 行号显示（g-005，文案与已批原型一致；默认不显示=零回归）
 		new Setting(containerEl)
-			.setName('行号显示')
-			.setDesc('为 embed-<lang> 代码块显示行号列。默认不显示，与当前版本行为一致；仅对 embed 块生效，不影响普通代码块。')
+			.setName(t('settingsLineNumbers'))
+			.setDesc(t('settingsLineNumbersDesc'))
 			.addDropdown(dd => dd
 				.addOptions({
-					'none': '不显示（默认）',
-					'original': '显示原行号',
-					'new': '显示新行号'
+					'none': t('lineNumbersNone'),
+					'original': t('lineNumbersOriginal'),
+					'new': t('lineNumbersNew')
 				})
 				.setValue(this.plugin.settings.lineNumbers)
 				.onChange(async (value) => {
@@ -71,8 +72,8 @@ export class EmbedCodeFileSettingTab extends PluginSettingTab {
 
 		// g-009：选中隐藏浮动按钮开关（默认开启；只在有块内选区且开启时才出现，不影响渲染结果）
 		new Setting(containerEl)
-			.setName('选中隐藏浮动按钮')
-			.setDesc('在 embed 代码块内选中代码时，于选区附近浮现「隐藏选中行」按钮。关闭后不再浮现该按钮；命令「隐藏选中的代码行」与「显示全部（清除隐藏）」以及块右上角的「显示全部」小按钮仍然可用。')
+			.setName(t('settingsSelectionHideButton'))
+			.setDesc(t('settingsSelectionHideButtonDesc'))
 			.addToggle(tg => tg
 				.setValue(this.plugin.settings.selectionHideButton)
 				.onChange(async (value) => {
@@ -81,17 +82,17 @@ export class EmbedCodeFileSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName("Font color of title")
+			.setName(t('settingsTitleFontColor'))
 			.addText(text => text
-				.setPlaceholder('Enter a color')
+				.setPlaceholder(t('settingsTitleFontColorPlaceholder'))
 				.setValue(this.plugin.settings.titleFontColor)
 				.onChange(async (value) => {
 					this.plugin.settings.titleFontColor = value;
 					await this.plugin.saveSettings();
 				}));
-		  
+
 		new Setting(containerEl)
-			.setName('Background color of title')
+			.setName(t('settingsTitleBgColor'))
 			.addText(text => text
 				.setPlaceholder('#00000020')
 				.setValue(this.plugin.settings.titleBackgroundColor)
