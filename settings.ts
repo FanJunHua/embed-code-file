@@ -13,13 +13,19 @@ export interface EmbedCodeFileSettings {
 	titleBackgroundColor: string;
 	titleFontColor: string;
 	lineNumbers: LineNumberMode;
+	/** g-009：块内选中代码时是否浮现「隐藏选中行」浮动按钮（命令与「显示全部」不受此开关影响） */
+	selectionHideButton: boolean;
+	/** g-009：块级「显示全部」按钮要避让的核心按钮选择器（不同主题类名不同，故做成可配置数组） */
+	hideAllButtonCoreSelectors: string[];
 }
 
 export const DEFAULT_SETTINGS: EmbedCodeFileSettings = {
 	includedLanguages: 'c,cs,cpp,java,python,go,ruby,javascript,js,typescript,ts,shell,sh,bash',
 	titleBackgroundColor: "#00000020",
 	titleFontColor: "",
-	lineNumbers: 'none'
+	lineNumbers: 'none',
+	selectionHideButton: true,
+	hideAllButtonCoreSelectors: ['.copy-code-button', '.edit-block-button', '.code-block-flair']
 }
 
 export class EmbedCodeFileSettingTab extends PluginSettingTab {
@@ -60,6 +66,17 @@ export class EmbedCodeFileSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.lineNumbers)
 				.onChange(async (value) => {
 					this.plugin.settings.lineNumbers = value as LineNumberMode;
+					await this.plugin.saveSettings();
+				}));
+
+		// g-009：选中隐藏浮动按钮开关（默认开启；只在有块内选区且开启时才出现，不影响渲染结果）
+		new Setting(containerEl)
+			.setName('选中隐藏浮动按钮')
+			.setDesc('在 embed 代码块内选中代码时，于选区附近浮现「隐藏选中行」按钮。关闭后不再浮现该按钮；命令「隐藏选中的代码行」与「显示全部（清除隐藏）」以及块右上角的「显示全部」小按钮仍然可用。')
+			.addToggle(tg => tg
+				.setValue(this.plugin.settings.selectionHideButton)
+				.onChange(async (value) => {
+					this.plugin.settings.selectionHideButton = value;
 					await this.plugin.saveSettings();
 				}));
 

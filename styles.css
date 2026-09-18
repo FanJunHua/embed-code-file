@@ -63,6 +63,80 @@
     right: 0;
 }
 
+/* ===== 选中代码隐藏（g-009）===== */
+/* 行号列交互（g-009 增量）：单击=隐藏该行、拖选=多行并浮出确认按钮。
+   行号容器已 user-select:none，故在行号上拖选不会污染代码选区文本。 */
+.markdown-rendered pre.embed-has-line-numbers .embed-line-gutter {
+    cursor: pointer;
+}
+
+.markdown-rendered pre.embed-has-line-numbers .embed-line-number:hover {
+    color: var(--text-normal);
+    background-color: var(--background-modifier-hover);
+}
+
+.markdown-rendered pre.embed-has-line-numbers .embed-line-number.is-selected {
+    color: var(--text-on-accent);
+    background-color: var(--text-selection, var(--interactive-accent));
+    border-radius: 2px;
+}
+
+/* 浮动按钮挂在 document.body 上（fixed 定位）：块内有选区时出现在选区上方。
+   样式只影响按钮本身，不改变任何既有渲染产物（默认不显示选区时按钮根本不存在）。 */
+.embed-hide-float {
+    position: fixed;
+    z-index: var(--layer-menu, 40);
+    padding: 3px 10px;
+    font-size: var(--font-ui-smaller, 12px);
+    color: var(--text-normal);
+    background-color: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    box-shadow: var(--shadow-s);
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.embed-hide-float:hover {
+    background-color: var(--background-modifier-hover);
+}
+
+/* 行号列默认 pointer-events:none（复制不夹带行号），但选中隐藏需要块内任意点击都落在
+   代码行上——否则点击行号区会让选区起点偏右，映射出错行。行号整列留空不可选，放开无副作用。 */
+.markdown-rendered pre.embed-has-line-numbers .embed-line-gutter {
+    pointer-events: auto;
+}
+
+/* 块级「显示全部（N 行已隐藏）」：仅在该块已有 HIDE 时创建，悬停/聚焦时浮现。
+   right 由 JS（applyHideAllButtonPosition）按「核心按钮（复制/编辑）左侧 6px」动态设置——
+   核心按钮常悬停才完整布局，故 CSS 只给兜底值，避免与它们重叠。 */
+.markdown-rendered pre .embed-hide-all-btn {
+    position: absolute;
+    top: 2px;
+    right: 6px;             /* 兜底：JS 未及定位（或找不到核心按钮）时使用 */
+    z-index: 2;
+    padding: 1px 8px;
+    font-size: var(--font-ui-smaller, 12px);
+    color: var(--text-muted);
+    background-color: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 5px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 120ms ease-in-out;
+}
+
+.markdown-rendered pre:hover .embed-hide-all-btn,
+.markdown-rendered pre:focus-within .embed-hide-all-btn {
+    opacity: 1;
+}
+
+.markdown-rendered pre .embed-hide-all-btn:hover {
+    color: var(--text-normal);
+    background-color: var(--background-modifier-hover);
+}
+
 /* ===== Add embed-code（g-003 右键快速添加）===== */
 .embed-add-modal .setting-item-control {
     position: relative;
